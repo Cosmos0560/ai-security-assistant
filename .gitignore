@@ -1,0 +1,29 @@
+# Virtual environments (project venv plus the two check venvs)
+.venv/
+.venv-wsl/
+.venv-release/
+
+# Build output
+build/
+dist/
+*.egg-info/
+
+# Caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Report output
+reports/
+
+# Graphify output (never committed; confirmed in Phase 1 step 6)
+graphify-out/
