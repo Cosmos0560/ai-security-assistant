@@ -63,8 +63,18 @@ running):
 | Hard ceiling with `--max-calls 480` | at most about 0.75M in, 0.29M out | about $0.22 |
 
 The ceiling comes from the budget: 480 attempts at most, each at most about 1,500 input tokens
-and 600 output tokens. Another model costs proportionally more (for example, Claude Sonnet 5.5
-lists at 20 times the Haiku 5.5 price, so its ceiling is about $4.40).
+and 600 output tokens. The output stays small because a forced tool call on Claude Haiku 5.5
+skips thinking, so the reply is the tool call alone.
+
+## Which models work
+
+The provider forces the tool call (`tool_choice` naming the triage tool) and sends no sampling
+parameter. Claude Haiku 5.5, the default, accepts this. Some current models reject a forced
+`tool_choice` with a 400, among them Claude Opus 5.5, Claude Sonnet 5.5 and Claude Fable 5.1 and
+5.2, so do not point `AISA_ANTHROPIC_MODEL` at them without changing the provider. A model that
+works costs in proportion to its price list (Claude Haiku 4.5, for example, lists at 10 times the
+Haiku 5.5 price, a ceiling of about $2.20). With no `temperature` sent, replies vary from run to
+run: unlike the mock eval, the live numbers are not reproducible.
 
 ## Before the full run: a one-call check
 
@@ -74,10 +84,8 @@ Run the single live test first. It makes one call and costs a fraction of a cent
 AISA_LIVE=1 .venv/Scripts/python -m pytest -m live tests/live
 ```
 
-Known risk, not verified here because no live call is ever made in development: the provider
-sends `temperature=0` and forces the tool call with `tool_choice: {"type": "tool", ...}`.
-Anthropic's current API reference says Claude Haiku 5.5 rejects non-default sampling values with
-a 400, and some current models reject forced `tool_choice`. If the one-call check fails with a
-`BadRequestError`, the provider request needs updating before the full run (a code change in
-`providers/anthropic.py`, outside this document). Rejected requests are not billed, but each
-attempt still spends one unit of `--max-calls`.
+The request follows Anthropic's current API reference for Claude Haiku 5.5 (no sampling
+parameters, a forced tool call), but no live call is ever made in development, so this check is
+the first time it meets the real API. If it fails with a `BadRequestError`, fix the request in
+`providers/anthropic.py` before the full run. Rejected requests are not billed, but each attempt
+still spends one unit of `--max-calls`.

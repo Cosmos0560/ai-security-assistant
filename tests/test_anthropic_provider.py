@@ -95,7 +95,10 @@ def test_the_request_is_a_forced_tool_call_with_every_cost_guard() -> None:
     (call,) = client.messages.calls
     assert call["model"] == DEFAULT_MODEL == "claude-haiku-5-5"
     assert call["max_tokens"] == MAX_TOKENS
-    assert call["temperature"] == 0
+    # Claude Haiku 5.5 answers a non-default sampling parameter with a 400: none is ever sent.
+    assert not {"temperature", "top_p", "top_k"} & call.keys()
+    # A forced tool call skips thinking on Claude Haiku 5.5; no thinking setting is sent either.
+    assert "thinking" not in call
     assert call["timeout"] == REQUEST_TIMEOUT_SECONDS
     assert call["system"] == "the system prompt"
     assert call["messages"] == [{"role": "user", "content": "the user prompt"}]

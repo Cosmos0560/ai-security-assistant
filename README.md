@@ -96,7 +96,8 @@ aisa eval --out metrics.json
   share nothing with the detector. It stands in for an undefended model in the demo and the eval.
 - `anthropic` is optional: install the `[anthropic]` extra; the key comes only from the
   `ANTHROPIC_API_KEY` environment variable and is never printed, logged or written; the model is
-  `AISA_ANTHROPIC_MODEL` (default `claude-haiku-5-5`); the endpoint is always passed explicitly
+  `AISA_ANTHROPIC_MODEL` (default `claude-haiku-5-5`; the request forces the tool call, which
+  some current models reject, see [docs/LIVE_EVAL.md](docs/LIVE_EVAL.md)); the endpoint is always passed explicitly
   (`https://api.anthropic.com`, or an https `AISA_ANTHROPIC_BASE_URL`), so an inherited
   `ANTHROPIC_BASE_URL` cannot redirect alert data and the key; every attempt, retries included,
   counts against `--max-calls`.

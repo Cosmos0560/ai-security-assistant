@@ -10,13 +10,21 @@ Settings, all from the environment, never from a file or a flag:
   ``https://api.anthropic.com``). An inherited variable could otherwise send the alert data and the
   key to a host the user never chose.
 
-Cost guard: temperature 0, a ``max_tokens`` cap, a per-request timeout, and a bounded retry loop
-of our own. The SDK's internal retries are switched off (``max_retries=0``) because they would
-spend calls the ``CallBudget`` never sees; every attempt here, retries included, spends one unit.
+Cost guard: a ``max_tokens`` cap, a per-request timeout, and a bounded retry loop of our own. The
+SDK's internal retries are switched off (``max_retries=0``) because they would spend calls the
+``CallBudget`` never sees; every attempt here, retries included, spends one unit.
 
-Structured output uses a forced tool call whose ``input_schema`` is the triage schema. The tool
-input comes back as raw JSON text for ``triage.py``'s strict parse; a reply with no tool call, more
-than one, or a truncated one is a ``MalformedReply`` (a parse failure), never a guess.
+No sampling parameter is sent. Claude Haiku 5.5 rejects any non-default ``temperature``, ``top_p``
+or ``top_k`` with a 400 (and API version 2026-10-21 rejects them on every model), so replies are
+not deterministic; the forced tool call and the strict parse constrain the output instead.
+
+Structured output uses a forced tool call whose ``input_schema`` is the triage schema. Claude Haiku
+5.5 accepts a forced ``tool_choice`` and then skips thinking, so the reply is the tool call alone
+and ``MAX_TOKENS`` covers it. Some current models (Claude Opus 5.5, Claude Sonnet 5.5, Claude
+Fable 5.1 and 5.2) reject a forced ``tool_choice`` with a 400; ``AISA_ANTHROPIC_MODEL`` must name a
+model that accepts it. The tool input comes back as raw JSON text for ``triage.py``'s strict parse;
+a reply with no tool call, more than one, or a truncated one is a ``MalformedReply`` (a parse
+failure), never a guess.
 """
 
 from __future__ import annotations
@@ -129,7 +137,6 @@ class AnthropicProvider:
                 response = self._client.messages.create(
                     model=self._model,
                     max_tokens=MAX_TOKENS,
-                    temperature=0,
                     timeout=REQUEST_TIMEOUT_SECONDS,
                     system=system,
                     messages=[{"role": "user", "content": user}],
