@@ -16,6 +16,11 @@ decision as ``ensure_ascii`` JSON, and stops (no provider, no report).
 dataset with the mock providers only (seeded, deterministic, offline). It prints the metrics JSON,
 or writes it to ``--out``; ``--readme`` rewrites the generated metrics block of that file.
 
+``aisa eval --provider anthropic --max-calls N --out FILE`` is the optional LIVE eval
+(docs/LIVE_EVAL.md). It spends real money, so it runs only with ``AISA_LIVE=1`` and a key, needs an
+explicit call budget and a results file that does not exist yet, and refuses ``--readme``: the
+README table is mock-only. The gate, the tests and CI never run it.
+
 Exit codes (PLAN section 2): 0 every alert triaged; 3 at least one alert needs human review or
 hit the call budget; 2 usage, input or provider-setup error, or a report that would be
 overwritten; 1 internal error (no traceback is printed).
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -35,11 +41,11 @@ from ai_security_assistant.detector.heuristics import detect
 from ai_security_assistant.eval.dataset import load_dataset
 from ai_security_assistant.eval.metrics import compute_metrics
 from ai_security_assistant.eval.readme_table import MarkerError, render_block, replace_block
-from ai_security_assistant.eval.runner import run_eval
+from ai_security_assistant.eval.runner import EvalRun, run_eval, run_live_eval
 from ai_security_assistant.ingest import FORMATS, IngestError, load_alerts
 from ai_security_assistant.ingest.base import safe_repr
 from ai_security_assistant.models import Alert
-from ai_security_assistant.pipeline import DefenseConfig, RunResult, run_pipeline
+from ai_security_assistant.pipeline import DefenseConfig, RunResult, Status, run_pipeline
 from ai_security_assistant.providers import PROVIDER_NAMES, CallBudget, make_provider
 from ai_security_assistant.providers.base import ProviderConfigError
 from ai_security_assistant.report import ReportExistsError, ReportPaths, write_reports
@@ -53,6 +59,9 @@ DEFAULT_MAX_CALLS = 20
 DEFAULT_OUT_DIR = Path("reports")
 # The only configuration the CLI runs. Not an option: there is no flag that changes it.
 CLI_DEFENSES = DefenseConfig.ALL
+# ``aisa eval`` providers: the mocks (the default, offline) or the optional live eval.
+EVAL_PROVIDERS = ("mock", "anthropic")
+LIVE_ENV = "AISA_LIVE"
 
 
 def utc_now() -> datetime:
@@ -134,6 +143,21 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--readme", type=Path, help="rewrite the generated metrics block in this README"
     )
+    evaluate.add_argument(
+        "--provider",
+        choices=EVAL_PROVIDERS,
+        default="mock",
+        help="mock (default: offline, deterministic, feeds the README) or anthropic (the optional "
+        "live eval: needs AISA_LIVE=1, ANTHROPIC_API_KEY, --max-calls and a new --out file; it "
+        "never touches the README)",
+    )
+    evaluate.add_argument(
+        "--max-calls",
+        type=_non_negative_int,
+        default=None,
+        help="live eval only: most provider calls in the whole run, retries included "
+        "(480 covers 120 alerts x 4 configurations)",
+    )
     return parser
 
 
@@ -205,7 +229,62 @@ def metrics_json(metrics: dict[str, object]) -> str:
     return json.dumps(metrics, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n"
 
 
+def _attack_line(metrics: dict[str, object]) -> str:
+    totals = metrics["totals"]["full"]  # type: ignore[index]
+    success = ", ".join(
+        f"{config} {cell['n']}/{cell['of']}" for config, cell in totals["attack_success"].items()
+    )
+    return f"aisa: eval attack success: {success}"
+
+
+def _exhausted(run: EvalRun) -> int:
+    return sum(1 for r in run.naive for o in r.outcomes if o.status is Status.BUDGET_EXHAUSTED)
+
+
+def _live_eval(args: argparse.Namespace) -> int:
+    """The optional live eval (docs/LIVE_EVAL.md). Every guard runs before the provider is built."""
+    if os.environ.get(LIVE_ENV) != "1":
+        return _error(f"the live eval calls a paid API; set {LIVE_ENV}=1 to run it on purpose")
+    if args.readme is not None:
+        return _error("the live eval never writes the README; the README table is mock-only")
+    if args.out is None:
+        return _error("the live eval needs --out, a separate results file")
+    if not args.max_calls:
+        return _error("the live eval needs --max-calls (480 covers 120 alerts x 4 configurations)")
+    out: Path = args.out
+    if out.exists():
+        return _error(f"{safe_repr(str(out), 200)} exists; the live eval never overwrites results")
+    if not out.parent.is_dir():
+        return _error(f"{safe_repr(str(out.parent), 200)} is not a directory")
+    budget = CallBudget(args.max_calls)
+    try:
+        provider = make_provider(args.provider, budget)
+    except ProviderConfigError as exc:
+        return _error(str(exc))
+    run = run_live_eval(load_dataset(), provider, budget)
+    metrics = compute_metrics(run)
+    try:
+        with out.open("x", encoding="ascii", newline="\n") as handle:
+            handle.write(metrics_json(metrics))
+    except OSError:
+        # The calls are already paid for: keep the results on stdout rather than lose them.
+        print(metrics_json(metrics), end="")
+        return _error("cannot write the live eval results file; the metrics are on stdout")
+    print(f"aisa: live eval used {budget.used} of {budget.max_calls} calls")
+    print(_attack_line(metrics))
+    print(f"aisa: wrote {terminal_safe(out.as_posix())}")
+    exhausted = _exhausted(run)
+    if exhausted:
+        print(f"aisa: {exhausted} alert runs hit the call budget; the results are incomplete")
+        return EXIT_REVIEW
+    return EXIT_OK
+
+
 def _eval(args: argparse.Namespace) -> int:
+    if args.provider != "mock":
+        return _live_eval(args)
+    if args.max_calls is not None:
+        return _error("--max-calls applies to the live eval only (--provider anthropic)")
     metrics = compute_metrics(run_eval(load_dataset()))
     text = metrics_json(metrics)
     try:
@@ -223,11 +302,7 @@ def _eval(args: argparse.Namespace) -> int:
     if args.out is None:
         print(text, end="")
         return EXIT_OK
-    totals = metrics["totals"]["full"]
-    success = ", ".join(
-        f"{config} {cell['n']}/{cell['of']}" for config, cell in totals["attack_success"].items()
-    )
-    print(f"aisa: eval attack success: {success}")
+    print(_attack_line(metrics))
     print(f"aisa: wrote {terminal_safe(args.out.as_posix())}")
     if args.readme is not None:
         print(f"aisa: rewrote the metrics block in {terminal_safe(args.readme.as_posix())}")
