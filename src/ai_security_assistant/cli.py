@@ -1,5 +1,8 @@
 """Command-line entry point: ``aisa triage --dry-run <file>`` (Phase 2) and ``--version``.
 
+``--dry-run`` prints each normalized alert together with its sanitize report and detector
+decision (Phase 3), still as ``ensure_ascii`` JSON.
+
 Exit codes: 0 success, 2 usage or input error. ``--dry-run`` prints the normalized alerts as
 JSON with ``ensure_ascii=True``, so a control or bidi character inside an alert field is
 written as a ``\\uXXXX`` escape and never reaches the terminal raw. Error messages are built
@@ -15,8 +18,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ai_security_assistant import __version__
+from ai_security_assistant.detector.heuristics import detect
 from ai_security_assistant.ingest import FORMATS, IngestError, load_alerts
 from ai_security_assistant.ingest.base import safe_repr
+from ai_security_assistant.models import Alert
+from ai_security_assistant.sanitize import sanitize_alert
 
 EXIT_OK = 0
 EXIT_INPUT_ERROR = 2
@@ -50,6 +56,17 @@ def _error(message: str) -> int:
     return EXIT_INPUT_ERROR
 
 
+def _dry_run_entry(alert: Alert) -> dict[str, object]:
+    """The normalized alert plus what the input-side defenses make of it (Phase 3)."""
+    sanitized, report = sanitize_alert(alert)
+    result = detect(sanitized, report)
+    return {
+        **alert.model_dump(mode="json"),
+        "sanitize": report.to_dict(),
+        "detector": result.to_dict(),
+    }
+
+
 def _triage(args: argparse.Namespace) -> int:
     if not args.dry_run:
         return _error("only --dry-run is available yet; triage itself arrives in a later phase")
@@ -57,7 +74,7 @@ def _triage(args: argparse.Namespace) -> int:
         alerts = load_alerts(args.file, args.format)
     except IngestError as exc:
         return _error(f"{safe_repr(str(args.file), 200)}: {exc}")
-    document = [alert.model_dump(mode="json") for alert in alerts]
+    document = [_dry_run_entry(alert) for alert in alerts]
     print(json.dumps(document, indent=2, ensure_ascii=True, allow_nan=False))
     return EXIT_OK
 

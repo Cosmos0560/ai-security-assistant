@@ -9,8 +9,21 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from hypothesis import HealthCheck, settings
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# CI-safe Hypothesis profile: no wall-clock deadline (Windows runners are slow and noisy), no
+# random seed (a failure reproduces from the same example order), no example database on disk.
+settings.register_profile(
+    "ci",
+    deadline=None,
+    derandomize=True,
+    database=None,
+    max_examples=150,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+settings.load_profile("ci")
 
 
 def load_script(name: str, relative: str) -> ModuleType:
