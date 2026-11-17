@@ -1,7 +1,9 @@
 """The two deterministic mock providers (D15): offline, free and reproducible.
 
-``WellBehavedMock`` ("mock") reads the nonce-tagged data block like a model that follows the
-system prompt: the block is data, and the reply is derived only from the alert fields. The raw
+``WellBehavedMock`` ("mock") reads the alert like a model that follows the system prompt: the
+alert is data, and the reply is derived only from its fields. It reads the nonce-tagged data
+block of a defended prompt, or the plain ``name: value`` lines of the naive baseline prompt
+(config ``none``, D35), so both mocks see the fields in every configuration. The raw
 severity maps to the enum, the rule maps to a technique through a small table, and the only IOCs
 it mentions are IPs and host names that the alert itself contains. Its output is always
 schema-valid.
@@ -21,7 +23,8 @@ import json
 import re
 from typing import Any, Final
 
-from ai_security_assistant.models import parse_ip
+from ai_security_assistant.models import parse_ip, untrusted_fields
+from ai_security_assistant.prompt import PLAIN_PROMPT_HEADER
 from ai_security_assistant.providers.base import CallBudget, ProviderError
 from ai_security_assistant.providers.naive_rules import extract_directives, read_like_a_model
 from ai_security_assistant.schema import SUMMARY_MAX_CHARS, Action, Severity
@@ -164,6 +167,39 @@ def read_block(user: str) -> dict[str, str | None]:
         raise ProviderError("mock could not read the data block") from None
 
 
+def read_plain(user: str) -> dict[str, str | None]:
+    """The fields of a naive baseline prompt (D35): ``name: value`` lines after the header.
+
+    Raises ``ProviderError`` if ``user`` is not one. The first line that starts with a field name
+    sets that field; any other line continues the field before it (a raw value may hold line
+    breaks), so a value cannot re-set a field that came earlier.
+    """
+    lines = user.split("\n")
+    if lines[0] != PLAIN_PROMPT_HEADER:
+        raise ProviderError("mock could not find the alert")
+    names = ("source", *untrusted_fields())
+    fields: dict[str, str | None] = dict.fromkeys(untrusted_fields())
+    seen: set[str] = set()
+    current: str | None = None
+    for line in lines[1:]:
+        name, sep, value = line.partition(": ")
+        if sep and name in names and name not in seen:
+            seen.add(name)
+            current = name
+            if name != "source":
+                fields[name] = value
+        elif current is not None and current != "source":
+            fields[current] = f"{fields[current]}\n{line}"
+    return fields
+
+
+def read_fields(user: str) -> dict[str, str | None]:
+    """The alert fields of a defended (block) or naive (plain) user prompt."""
+    if _NONCE_LINE_RE.search(user) is not None:
+        return read_block(user)
+    return read_plain(user)
+
+
 def _dump(document: dict[str, Any]) -> str:
     return json.dumps(document, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
 
@@ -181,7 +217,7 @@ class WellBehavedMock:
 
     def complete(self, system: str, user: str) -> str:
         self._budget.spend()
-        return _dump(triage_from_fields(read_block(user)))
+        return _dump(triage_from_fields(read_fields(user)))
 
 
 class NaiveMock:
@@ -198,9 +234,9 @@ class NaiveMock:
     def complete(self, system: str, user: str) -> str:
         self._budget.spend()
         try:
-            fields = read_block(user)
+            fields = read_fields(user)
         except ProviderError:
-            fields = {}  # no block to read: the naive model still answers
+            fields = {}  # nothing it can read as an alert: the naive model still answers
         document = triage_from_fields(fields)
         directives = extract_directives(read_like_a_model(user))
 
@@ -215,6 +251,10 @@ class NaiveMock:
             document["recommended_actions"] = [
                 *document["recommended_actions"],
                 *directives.extra_actions,
+            ]
+        if directives.summary_text is not None:  # D34: the attacker's words lead the summary
+            document["summary"] = f"{directives.summary_text} {document['summary']}"[
+                :SUMMARY_MAX_CHARS
             ]
         if directives.fabricate_ioc is not None:
             ioc = _invent(directives.fabricate_ioc, user)

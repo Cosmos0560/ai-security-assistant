@@ -22,8 +22,10 @@ config              sanitize + wrap  detector  validator
 With the validator OFF the reply is read PERMISSIVELY (``validator.read_permissive``): a JSON
 object is accepted with its fields as they are (any severity string, any action string), and
 anything else is accepted as prose. That models an undefended system honestly for the ablation;
-the strict schema check belongs to the validator layer only. With sanitize + wrap OFF the user
-prompt is the raw field values as plain ``name: value`` lines, with no boundary.
+the strict schema check belongs to the validator layer only. With sanitize + wrap OFF (``none``)
+the run uses the NAIVE prompt pair (D35): a system prompt with no trust rules and a user prompt
+of raw, unsanitized ``name: value`` lines with no boundary. The canary is in the system prompt in
+every configuration, because it is measurement instrumentation, not a defense.
 
 The configurations are reachable only through this Python API (the Phase 6 eval). ``aisa
 triage`` always runs ``all`` and has no option to weaken it.
@@ -38,8 +40,15 @@ from typing import Final
 
 from ai_security_assistant.detector.canary import new_canary
 from ai_security_assistant.detector.heuristics import DetectionResult, detect
-from ai_security_assistant.models import Alert, untrusted_fields
-from ai_security_assistant.prompt import PROMPT_VERSION, build_system_prompt, build_user_prompt
+from ai_security_assistant.models import Alert
+from ai_security_assistant.prompt import (
+    NAIVE_PROMPT_VERSION,
+    PROMPT_VERSION,
+    build_naive_system_prompt,
+    build_plain_user_prompt,
+    build_system_prompt,
+    build_user_prompt,
+)
 from ai_security_assistant.providers.base import CallBudget, Provider
 from ai_security_assistant.sanitize import sanitize_alert
 from ai_security_assistant.schema import TriageOutput
@@ -198,12 +207,14 @@ class RunResult:
 
 def plain_prompt(alert: Alert) -> str:
     """The user prompt with sanitize + wrap OFF (config ``none``): raw values, no boundary."""
-    lines = [f"source: {alert.source}"]
-    for name in untrusted_fields():
-        value = getattr(alert, name)
-        if value is not None:
-            lines.append(f"{name}: {value}")
-    return "\n".join(lines)
+    return build_plain_user_prompt(alert)
+
+
+def system_prompt_for(config: DefenseConfig, canary: str) -> tuple[str, str]:
+    """``(system prompt, prompt version)`` for ``config``: the naive pair for ``none`` (D35)."""
+    if config.sanitize_wrap:
+        return build_system_prompt(canary), PROMPT_VERSION
+    return build_naive_system_prompt(canary), NAIVE_PROMPT_VERSION
 
 
 def _decide(
@@ -278,7 +289,7 @@ def run_pipeline(
         raise TypeError("config must be a DefenseConfig")
     canary = new_canary(seed)
     nonce = new_nonce(seed)
-    system = build_system_prompt(canary)
+    system, prompt_version = system_prompt_for(config, canary)
     outcomes: Sequence[AlertOutcome] = [
         run_alert(alert, provider, config=config, system=system, canary=canary, nonce=nonce)
         for alert in alerts
@@ -286,7 +297,7 @@ def run_pipeline(
     return RunResult(
         config=config,
         provider=provider.name,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=prompt_version,
         outcomes=tuple(outcomes),
         calls_used=budget.used,
         calls_max=budget.max_calls,

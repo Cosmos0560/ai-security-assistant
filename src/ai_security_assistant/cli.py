@@ -1,4 +1,4 @@
-"""Command-line entry point: ``aisa triage <file>`` and ``--version``.
+"""Command-line entry point: ``aisa triage <file>``, ``aisa eval`` and ``--version``.
 
 ``aisa triage`` runs the full pipeline with EVERY defense on (``DefenseConfig.ALL``): sanitize +
 wrap, detector, one provider call per alert (``--provider``, ``--max-calls``) and the validator.
@@ -11,6 +11,10 @@ The terminal gets only an escaped summary (counts and the two paths), never aler
 
 ``--dry-run`` prints each normalized alert together with its sanitize report and detector
 decision as ``ensure_ascii`` JSON, and stops (no provider, no report).
+
+``aisa eval [--out metrics.json] [--readme README.md]`` runs the Phase 6 ablation on the packaged
+dataset with the mock providers only (seeded, deterministic, offline). It prints the metrics JSON,
+or writes it to ``--out``; ``--readme`` rewrites the generated metrics block of that file.
 
 Exit codes (PLAN section 2): 0 every alert triaged; 3 at least one alert needs human review or
 hit the call budget; 2 usage, input or provider-setup error, or a report that would be
@@ -28,6 +32,10 @@ from pathlib import Path
 
 from ai_security_assistant import __version__
 from ai_security_assistant.detector.heuristics import detect
+from ai_security_assistant.eval.dataset import load_dataset
+from ai_security_assistant.eval.metrics import compute_metrics
+from ai_security_assistant.eval.readme_table import MarkerError, render_block, replace_block
+from ai_security_assistant.eval.runner import run_eval
 from ai_security_assistant.ingest import FORMATS, IngestError, load_alerts
 from ai_security_assistant.ingest.base import safe_repr
 from ai_security_assistant.models import Alert
@@ -117,6 +125,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="overwrite existing report files",
     )
+    evaluate = commands.add_parser(
+        "eval", help="run the 4-config ablation on the packaged dataset (mock providers only)"
+    )
+    evaluate.add_argument(
+        "--out", type=Path, help="write the metrics JSON here instead of printing it"
+    )
+    evaluate.add_argument(
+        "--readme", type=Path, help="rewrite the generated metrics block in this README"
+    )
     return parser
 
 
@@ -183,13 +200,49 @@ def _triage(args: argparse.Namespace, clock: Callable[[], datetime]) -> int:
     return EXIT_OK if run.all_triaged else EXIT_REVIEW
 
 
+def metrics_json(metrics: dict[str, object]) -> str:
+    """The metrics document as stable, ASCII-only JSON (sorted keys, LF, trailing newline)."""
+    return json.dumps(metrics, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n"
+
+
+def _eval(args: argparse.Namespace) -> int:
+    metrics = compute_metrics(run_eval(load_dataset()))
+    text = metrics_json(metrics)
+    try:
+        if args.readme is not None:
+            readme: Path = args.readme
+            updated = replace_block(readme.read_bytes().decode("utf-8"), render_block(metrics))
+            readme.write_bytes(updated.encode("utf-8"))
+        if args.out is not None:
+            out: Path = args.out
+            out.write_bytes(text.encode("ascii"))
+    except MarkerError as exc:
+        return _error(str(exc))
+    except (OSError, UnicodeDecodeError):
+        return _error("cannot read or write the eval output files")
+    if args.out is None:
+        print(text, end="")
+        return EXIT_OK
+    totals = metrics["totals"]["full"]
+    success = ", ".join(
+        f"{config} {cell['n']}/{cell['of']}" for config, cell in totals["attack_success"].items()
+    )
+    print(f"aisa: eval attack success: {success}")
+    print(f"aisa: wrote {terminal_safe(args.out.as_posix())}")
+    if args.readme is not None:
+        print(f"aisa: rewrote the metrics block in {terminal_safe(args.readme.as_posix())}")
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command != "triage":
+    if args.command not in {"triage", "eval"}:
         parser.print_help()
         return EXIT_OK
     try:
+        if args.command == "eval":
+            return _eval(args)
         return _triage(args, utc_now)
     except Exception:  # fail with a fixed message: no traceback, no untrusted text
         print("aisa: internal error", file=sys.stderr)

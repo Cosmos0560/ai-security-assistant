@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_security_assistant.detector.canary import new_canary
 from ai_security_assistant.ingest import load_alerts
 from ai_security_assistant.models import Alert
 from ai_security_assistant.pipeline import (
@@ -21,6 +22,12 @@ from ai_security_assistant.pipeline import (
     Status,
     plain_prompt,
     run_pipeline,
+)
+from ai_security_assistant.prompt import (
+    NAIVE_PROMPT_VERSION,
+    PROMPT_VERSION,
+    build_naive_system_prompt,
+    build_system_prompt,
 )
 from ai_security_assistant.providers.base import CallBudget, MalformedReply, ProviderError
 from ai_security_assistant.providers.mock import NaiveMock, WellBehavedMock
@@ -355,3 +362,65 @@ def test_without_any_defense_the_naive_mock_output_is_accepted(category: str) ->
         [alert], NaiveMock(budget), budget, config=DefenseConfig.NONE
     ).outcomes
     assert outcome.status is Status.TRIAGED
+
+
+# ---------------------------------------------------------------- D35: an honest ``none`` baseline
+
+
+@pytest.mark.parametrize("config", list(DefenseConfig), ids=lambda c: c.label)
+def test_the_canary_is_in_the_system_prompt_of_every_config(config: DefenseConfig) -> None:
+    provider, *_ = run_one(config, PROSE)
+    system, _user = provider.prompts[0]
+    assert new_canary("p") in system
+    naive = config is DefenseConfig.NONE
+    assert (system == build_naive_system_prompt(new_canary("p"))) is naive
+    assert (system == build_system_prompt(new_canary("p"))) is not naive
+    assert ("untrusted data" in system) is not naive
+
+
+@pytest.mark.parametrize("config", list(DefenseConfig), ids=lambda c: c.label)
+def test_the_run_records_the_prompt_version_it_used(config: DefenseConfig) -> None:
+    budget = CallBudget(1)
+    result = run_pipeline([ALERT], WellBehavedMock(budget), budget, config=config)
+    expected = NAIVE_PROMPT_VERSION if config is DefenseConfig.NONE else PROMPT_VERSION
+    assert result.prompt_version == expected
+
+
+@pytest.mark.parametrize("mock", [WellBehavedMock, NaiveMock], ids=["mock", "mock-naive"])
+@pytest.mark.parametrize("config", list(DefenseConfig), ids=lambda c: c.label)
+def test_both_mocks_read_the_fields_in_every_config(
+    config: DefenseConfig, mock: type[WellBehavedMock]
+) -> None:
+    budget = CallBudget(1)
+    (outcome,) = run_pipeline([ALERT], mock(budget), budget, config=config, seed="p").outcomes
+    assert outcome.status is Status.TRIAGED
+    assert outcome.verdict is not None and outcome.verdict.summary is not None
+    assert outcome.verdict.summary.startswith("Rule 86601 (Suricata: alert - web probe.)")
+    assert "edge01.example.test" in outcome.verdict.summary
+    assert outcome.verdict.severity == "medium"
+
+
+@pytest.mark.parametrize("category", list(golden_cases.HOSTILE))
+def test_the_naive_mock_reaches_its_goal_under_none(category: str) -> None:
+    """With ``none`` the fooled model's output is accepted AND it was built from the fields."""
+    message, goal = golden_cases.HOSTILE[category]
+    alert = ALERT.model_copy(update={"message": message})
+    budget = CallBudget(1)
+    (outcome,) = run_pipeline(
+        [alert], NaiveMock(budget), budget, config=DefenseConfig.NONE, seed="p"
+    ).outcomes
+    verdict = outcome.verdict
+    assert outcome.status is Status.TRIAGED and verdict is not None
+    if goal == "forced_severity":
+        assert verdict.severity in {"low", "info"}
+    elif goal == "non_json":
+        assert verdict.prose
+    elif goal == "off_allowlist_action":
+        assert "wipe_disk" in verdict.recommended_actions
+    elif goal == "canary_leak":
+        assert verdict.summary is not None and new_canary("p") in verdict.summary
+    else:
+        assert goal == "ungrounded_ioc"
+        assert verdict.summary is not None and "Linked indicator" in verdict.summary
+    if not verdict.prose:
+        assert verdict.mitre_technique == "T1190"  # read from the plain rule name
