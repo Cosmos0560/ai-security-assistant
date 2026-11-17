@@ -1,0 +1,11 @@
+# Narrow allowlist for the gate's secret and email scan (D20).
+#
+# Each [[entry]] allows ONE exact line: path + sha256 of that line (LF-normalized, no line
+# terminator) + reason. Only vendored pattern lines and scanner test fixtures may be listed
+# (scripts/gate.py ALLOWLIST_SCOPES). Editing an allowed line invalidates its entry, and an
+# entry that no longer suppresses a hit is stale, which fails the gate.
+
+[[entry]]
+path = "src/ai_security_assistant/third_party/secret_scanner/core/detect/private_key.py"
+sha256 = "23ec3f38f1dcbde182e18407c3fda6d6b725448ca775a485f83c20211af65ade"
+reason = "vendored private-key detector: the header literal of its own regex (line 39), not a key"

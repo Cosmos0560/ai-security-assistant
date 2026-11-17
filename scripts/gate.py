@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Project gate, Phase 1 checks.
+"""Project gate, checks up to Phase 5.
 
-Stdlib only. No shell pipes. Same behaviour on Windows and in WSL.
-Prints one line per check and exits non-zero on the first failing group.
+Stdlib only (plus the project's own vendored, stdlib-only secret-scanner). No shell pipes. Same
+behaviour on Windows and in WSL. Prints one line per check and exits non-zero on the first
+failing group.
 
 The gate is phase-aware (D31): a check is added in the phase that creates its
 artifact, and there is no "skip if file missing" logic. The gate's own scan
@@ -15,14 +16,24 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib
+import importlib.util
+import json
 import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
+VENDOR_DIR = SRC / "ai_security_assistant" / "third_party" / "secret_scanner"
+VENDOR_VERSION = "v1.0.0"
+SCAN_ALLOWLIST = ROOT / "scripts" / "scan_allowlist.toml"
+VALIDATOR_COVERAGE_FLOOR = 95
 
 # --------------------------------------------------------------------------- LF helper
 
@@ -178,13 +189,141 @@ SCAN_PATTERNS: dict[str, re.Pattern[str]] = {
 
 
 def scan_text(text: str) -> list[tuple[int, str]]:
-    """Return (line number, pattern name) for each hit. Never returns the matched text."""
+    """Return (line number, pattern name) for each hit of the gate's own patterns. Lines are
+    split on LF only, the same way the vendored scanner and the allowlist count them. Never
+    returns the matched text."""
     hits: list[tuple[int, str]] = []
-    for lineno, line in enumerate(text.splitlines(), start=1):
+    for lineno, line in enumerate(text.replace("\r\n", "\n").split("\n"), start=1):
         for name, pattern in SCAN_PATTERNS.items():
             if pattern.search(line):
                 hits.append((lineno, name))
     return hits
+
+
+# --------------------------------------------------------------------------- vendored patterns (P5)
+
+_VENDOR_ALIAS = "aisa_gate_vendored_secret_scanner"
+_vendored_engine: Any = None
+
+
+def _load_vendored_package() -> ModuleType:
+    """Import the vendored package under a private name (its imports are all relative)."""
+    if _VENDOR_ALIAS in sys.modules:
+        return sys.modules[_VENDOR_ALIAS]
+    spec = importlib.util.spec_from_file_location(
+        _VENDOR_ALIAS, VENDOR_DIR / "__init__.py", submodule_search_locations=[str(VENDOR_DIR)]
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load the vendored scanner from {VENDOR_DIR}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_VENDOR_ALIAS] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def vendored_engine() -> Any:
+    """The vendored scanner's engine with its built-in rules; entropy off (hashes and goldens
+    are high-entropy by design). Built once."""
+    global _vendored_engine
+    if _vendored_engine is None:
+        _load_vendored_package()
+        rules_mod = importlib.import_module(f"{_VENDOR_ALIAS}.core.rules")
+        engine_mod = importlib.import_module(f"{_VENDOR_ALIAS}.core.detect.engine")
+        entropy_mod = importlib.import_module(f"{_VENDOR_ALIAS}.core.detect.entropy")
+        document = json.loads((VENDOR_DIR / "rules" / "builtin.json").read_text(encoding="utf-8"))
+        rules = rules_mod.parse_rules_document(document)
+        _vendored_engine = engine_mod.Engine(
+            rules, entropy=entropy_mod.EntropyConfig(enabled=False)
+        )
+    return _vendored_engine
+
+
+def vendored_hits(data: bytes) -> list[tuple[int, str]]:
+    """(line number, "vendored:<rule id>") for each vendored-scanner match in ``data``."""
+    result = vendored_engine().scan(normalize_lf(data), use_entropy=False)
+    return [(match.line, f"vendored:{match.rule_id}") for match in result.matches]
+
+
+# --------------------------------------------------------------------------- scan allowlist (D20)
+
+# An allowlist entry may only cover these places: vendored pattern lines, scanner test fixtures.
+ALLOWLIST_SCOPES = (
+    "src/ai_security_assistant/third_party/secret_scanner/",
+    "tests/fixtures/secret_scanner/",
+)
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def line_sha256(line: str) -> str:
+    """The allowlist hash of one line: its exact text, LF-normalized, no terminator."""
+    return sha256_lf(line.rstrip("\n").encode("utf-8"))
+
+
+def load_allowlist(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Parse the allowlist TOML: ``(entries, problems)``; an entry is ``(path, sha256)``."""
+    try:
+        document = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return [], [f"scan allowlist: invalid TOML ({exc})"]
+    problems: list[str] = []
+    if set(document) - {"entry"}:
+        problems.append("scan allowlist: only [[entry]] tables are allowed")
+    raw_entries = document.get("entry", [])
+    if not isinstance(raw_entries, list):
+        return [], [*problems, "scan allowlist: entry must be an array of tables"]
+    entries: list[tuple[str, str]] = []
+    for index, raw in enumerate(raw_entries, start=1):
+        where = f"scan allowlist entry {index}"
+        if not isinstance(raw, dict) or set(raw) != {"path", "sha256", "reason"}:
+            problems.append(f"{where}: needs exactly path, sha256 and reason")
+            continue
+        path, digest, reason = raw["path"], raw["sha256"], raw["reason"]
+        if not all(isinstance(v, str) for v in (path, digest, reason)) or not reason.strip():
+            problems.append(f"{where}: path, sha256 and reason must be non-empty strings")
+            continue
+        if not _SHA256_RE.fullmatch(digest):
+            problems.append(f"{where}: sha256 must be 64 lower-case hex characters")
+            continue
+        if not path.startswith(ALLOWLIST_SCOPES) or ".." in path.split("/"):
+            problems.append(f"{where}: path outside the allowed scopes: {path}")
+            continue
+        if (path, digest) in entries:
+            problems.append(f"{where}: duplicate entry")
+            continue
+        entries.append((path, digest))
+    return entries, problems
+
+
+def scan_file(
+    rel: str, data: bytes, allowed: set[tuple[str, str]], used: set[tuple[str, str]]
+) -> list[str]:
+    """Problems for one file; marks the allowlist entries that suppressed a hit as used."""
+    text = normalize_lf(data).decode("utf-8", "replace")
+    lines = text.split("\n")
+    problems: list[str] = []
+    for lineno, name in sorted(set(scan_text(text)) | set(vendored_hits(data))):
+        key = (rel, line_sha256(lines[lineno - 1]))
+        if key in allowed:
+            used.add(key)
+        else:
+            problems.append(f"{rel}:{lineno}: {name}")
+    return problems
+
+
+def scan_files(files: Iterable[tuple[str, bytes]], entries: Sequence[tuple[str, str]]) -> list[str]:
+    """Scan ``(path, content)`` pairs against both pattern sets with the allowlist applied.
+    An allowlist entry that suppresses nothing is stale, and stale is an error."""
+    allowed = set(entries)
+    used: set[tuple[str, str]] = set()
+    problems: list[str] = []
+    for rel, data in files:
+        if b"\0" in data:
+            continue  # binary file
+        problems.extend(scan_file(rel, data, allowed, used))
+    for path, digest in entries:
+        if (path, digest) not in used:
+            problems.append(f"stale scan allowlist entry: {path} {digest[:12]}...")
+    return problems
 
 
 def git(*args: str) -> str:
@@ -206,20 +345,71 @@ def tracked_paths() -> list[str]:
     return [p for p in out.split("\0") if p]
 
 
-def check_secret_scan() -> list[str]:
-    problems: list[str] = []
+def _tracked_contents() -> Iterable[tuple[str, bytes]]:
     for rel in tracked_paths():
         path = ROOT / rel
-        if not path.is_file():
-            # Tracked but deleted in the working tree: nothing to scan.
+        if path.is_file():  # tracked but deleted in the working tree: nothing to scan
+            yield rel, path.read_bytes()
+
+
+def check_secret_scan() -> list[str]:
+    entries, problems = load_allowlist(SCAN_ALLOWLIST.read_text(encoding="utf-8"))
+    if problems:
+        return problems
+    return scan_files(_tracked_contents(), entries)
+
+
+# --------------------------------------------------------------------------- vendor integrity (P5)
+
+MANIFEST_NAME = "MANIFEST.sha256"
+_MANIFEST_LINE_RE = re.compile(r"([0-9a-f]{64})  (\S(?:.*\S)?)")
+_IGNORED_PARTS = frozenset({"__pycache__"})
+
+
+def vendor_problems(vendor_dir: Path, expected_version: str = VENDOR_VERSION) -> list[str]:
+    """Every vendored file matches the manifest (LF-normalized), nothing is unlisted, and
+    VERSION names the expected version."""
+    manifest = normalize_lf((vendor_dir / MANIFEST_NAME).read_bytes()).decode("utf-8")
+    listed: dict[str, str] = {}
+    problems: list[str] = []
+    for lineno, line in enumerate(manifest.split("\n"), start=1):
+        if not line:
             continue
-        data = path.read_bytes()
-        if b"\0" in data:
-            continue  # binary file
-        text = data.decode("utf-8", "replace")
-        for lineno, name in scan_text(text):
-            problems.append(f"{rel}:{lineno}: {name}")
+        match = _MANIFEST_LINE_RE.fullmatch(line)
+        if match is None:
+            problems.append(f"{MANIFEST_NAME}:{lineno}: malformed line")
+            continue
+        digest, rel = match.groups()
+        if rel.startswith("/") or ".." in rel.split("/") or "\\" in rel:
+            problems.append(f"{MANIFEST_NAME}:{lineno}: path must be relative: {rel}")
+        elif rel in listed:
+            problems.append(f"{MANIFEST_NAME}:{lineno}: duplicate path: {rel}")
+        else:
+            listed[rel] = digest
+    present = {
+        path.relative_to(vendor_dir).as_posix()
+        for path in vendor_dir.rglob("*")
+        if path.is_file()
+        and not _IGNORED_PARTS.intersection(path.relative_to(vendor_dir).parts)
+        and path.name != MANIFEST_NAME
+    }
+    for rel in sorted(present - set(listed)):
+        problems.append(f"vendored file not in the manifest: {rel}")
+    for rel, digest in sorted(listed.items()):
+        if rel not in present:
+            problems.append(f"manifest lists a missing file: {rel}")
+        elif sha256_lf((vendor_dir / rel).read_bytes()) != digest:
+            problems.append(f"vendored file does not match the manifest: {rel}")
+    if "VERSION" not in listed:
+        problems.append("VERSION is not in the manifest")
+    version_lines = normalize_lf((vendor_dir / "VERSION").read_bytes()).decode("utf-8")
+    if f"version: {expected_version}" not in version_lines.split("\n"):
+        problems.append(f"VERSION does not say version: {expected_version}")
     return problems
+
+
+def check_vendor_integrity() -> list[str]:
+    return vendor_problems(VENDOR_DIR)
 
 
 # --------------------------------------------------------------------------- graph and hygiene
@@ -284,6 +474,8 @@ def check_types() -> list[str]:
 
 
 def check_tests() -> list[str]:
+    # Overall floor 90%; the validator has its own floor (section 5). Vendored code is omitted
+    # from the figure (pyproject [tool.coverage.run]) and covered by its own smoke tests.
     return run_tool(
         [
             sys.executable,
@@ -292,6 +484,15 @@ def check_tests() -> list[str]:
             "--cov",
             "--cov-report=term-missing",
             "--cov-fail-under=90",
+        ]
+    ) or run_tool(
+        [
+            sys.executable,
+            "-m",
+            "coverage",
+            "report",
+            "--include=*/ai_security_assistant/validator/*",
+            f"--fail-under={VALIDATOR_COVERAGE_FLOOR}",
         ]
     )
 
@@ -304,7 +505,8 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
     ("pytest + coverage", check_tests),
     ("AST ban (execution primitives)", check_ast_ban),
     ("mock providers do not import the detector", check_detector_independence),
-    ("secret and email scan", check_secret_scan),
+    ("secret and email scan (own + vendored patterns, allowlist)", check_secret_scan),
+    ("vendor integrity (manifest, version)", check_vendor_integrity),
     ("graph output not staged, ignored", check_graph),
     ("commit hygiene", check_hygiene),
 ]

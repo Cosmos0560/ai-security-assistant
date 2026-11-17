@@ -49,6 +49,10 @@ extend-exclude = [".venv-wsl", ".venv-release"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+# Vendored code (D19) keeps upstream's import order; its imports were only made relative.
+"src/ai_security_assistant/third_party/secret_scanner/**" = ["I001"]
+
 [tool.mypy]
 strict = true
 files = ["src"]
@@ -64,6 +68,8 @@ markers = [
 [tool.coverage.run]
 source = ["ai_security_assistant"]
 branch = true
+# Vendored code (D19) is excluded from the figure; tests/test_vendored_scanner.py smoke-tests it.
+omit = ["*/ai_security_assistant/third_party/*"]
 
 [tool.coverage.report]
 show_missing = true

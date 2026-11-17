@@ -1,0 +1,55 @@
+name: secret-scanner
+version: v1.0.0
+tag: v1.0.0
+commit: 314888d31965ef29014c96b6a3c171404ab86bc6
+source: the owner's local clone (remote github.com/Cosmos0560/secret-scanner); copied with
+  `git show v1.0.0:<path>`, never fetched from GitHub
+license: MIT (LICENSE, copied unchanged)
+manifest: MANIFEST.sha256, sha256 over LF-normalized content (D29)
+
+Copied (from src/secret_scanner/ at the tag):
+  __init__.py
+  core/__init__.py core/checksums.py core/errors.py core/fakes.py core/limits.py
+  core/lines.py core/models.py core/redact.py core/regex_guard.py core/rules.py
+  core/sanitize.py
+  core/detect/__init__.py core/detect/engine.py core/detect/entropy.py
+  core/detect/match.py core/detect/prefilter.py core/detect/private_key.py
+  core/detect/rule_detector.py
+
+Edits (the only changes to copied code):
+  1. Every absolute import "from secret_scanner.<x> import" is made relative
+     ("from .<x>" / "from ..<x>"), so the package works at
+     ai_security_assistant.third_party.secret_scanner. Nothing else in any line changed.
+     Files and counts: core/errors.py 1, core/fakes.py 2, core/limits.py 1,
+     core/models.py 2, core/redact.py 2, core/regex_guard.py 2, core/rules.py 6,
+     core/detect/engine.py 8, core/detect/entropy.py 8, core/detect/match.py 1,
+     core/detect/private_key.py 6, core/detect/rule_detector.py 6.
+  2. rules/builtin.yaml is shipped as rules/builtin.json: the same document (same keys,
+     values and order), converted once with yaml.safe_load + json.dumps(indent=2). The
+     upstream loader needs PyYAML, and this project has one runtime dependency (D2).
+     Upstream builtin.yaml sha256 (raw bytes): 52928a72916a6e9a2b4691ad56b7b0ca9b6333d0657928348959259ea1568ba1
+     The JSON is validated at load time by the vendored core/rules.parse_rules_document.
+
+Omitted (not needed to scan a string):
+  services/loader.py          imports yaml (PyYAML) and importlib.resources
+  services/config.py services/fs_scanner.py services/git_scanner.py
+                              configuration, file and git scanning
+  gitio/runner.py gitio/demo_git.py
+                              import subprocess (git)
+  app/common.py app/scan_git.py app/scan.py app/rules.py app/demo.py
+                              CLI application layer (app/common.py, app/scan_git.py
+                              import subprocess)
+  cli/main.py __main__.py     the CLI
+  fs/walk.py fs/safe_files.py fs/sandbox.py
+                              file walking and file I/O (import os)
+  render/sarif.py render/json_out.py render/jsonl.py render/rules_out.py render/table.py
+                              SARIF and report output
+  host/clock.py host/hostinfo.py core/clock.py
+                              time and host information
+  core/entries.py core/globs.py core/pathrules.py
+                              file classification and path rules
+  core/gitparse.py            git output parsing
+  core/findings.py core/fingerprint.py core/ruleinfo.py core/suppress.py
+                              finding records, fingerprints, rule listings, suppression
+  py.typed rules/builtin.yaml (see edit 2), and every package __init__.py of an
+  omitted package
