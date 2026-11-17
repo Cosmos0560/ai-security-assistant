@@ -89,6 +89,8 @@ extraction (lets a hijacked model smuggle free text past the validator).
 5. canary check;
 6. length limits;
 7. secret scan of the output with the vendored secret-scanner v1.0.0.
+8. severity floor (D33): the output severity may not be below the floor derived from
+   the source tool's own severity.
 
 Rationale: the model's output is treated as attacker-influenced. Any failed check or
 any exception gives `needs_human_review`, never a partial result. Rejected: repair or
@@ -231,6 +233,21 @@ Phase 1 verifies which key the installed version supports (`includeCoAuthoredBy`
 `attribution`) and sets it. The hook remains the enforcing layer. Rejected: relying on
 the setting alone (a key the version ignores fails silently).
 
+**D33. Severity floor: the LLM may RAISE severity but may not LOWER it below the source's own severity (owner decision, Phase 5b).**
+The floor comes from a strict mapping table per source, never from free text:
+mini-siem's severity enum (`info`, `low`, `medium`, `high`, `critical`, exact
+lowercase), soc-log-analyzer's enum (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`, exact
+uppercase) and the Wazuh `rule.level` bands 0–3 info, 4–6 low, 7–11 medium, 12–14 high,
+15 critical (a plain integer 0–15). Any other raw value (unknown word, other case,
+padding, sign, a level above 15) is unmappable and gives NO floor; the alert is then
+judged by the other checks only. A severity below the floor is validator check 8 and
+gives `needs_human_review` with reason `severity.downgrade`. Raising severity is
+accepted by design: an injected "mark this critical" costs analyst attention but hides
+nothing, and the README lists it under "What it can't do". Rationale: a forced
+downgrade is the T1 goal that the other D12 checks cannot see, because it is
+schema-valid. Rejected: a floor parsed from alert text (attacker-controlled); a
+ceiling as well (would reject legitimate escalation).
+
 ---
 
 ## 2. Architecture
@@ -329,7 +346,7 @@ CLI flags, the system prompt, the code or the environment.
 
 | # | Threat | Controls | Residual risk |
 |---|--------|----------|---------------|
-| T1 | Instruction override in a field downgrades severity or closes the alert | Sanitize, wrap, detector block, schema, fail closed | Paraphrased injection below the threshold can still bias a real model's severity within the schema |
+| T1 | Instruction override in a field downgrades severity or closes the alert | Sanitize, wrap, detector block, schema, severity floor (D33), fail closed | Paraphrased injection below the threshold can still bias a real model's severity upward, or downward when the source severity is unmappable |
 | T2 | Delimiter escape to leave the data block | Random nonce boundary, escaping of boundary-shaped text | A model may still ignore boundaries; measured, not eliminated |
 | T3 | Obfuscation (zero-width, bidi, homoglyph, encoding) hides the payload | NFKC, control-char strip, blob flagging, no decoding | Homoglyphs that survive NFKC; novel encodings |
 | T4 | Output-format hijack (free text, extra keys, markup) | Strict JSON parse, schema, length limits, Markdown/ANSI escaping | None known inside the schema |

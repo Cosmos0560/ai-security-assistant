@@ -253,7 +253,8 @@ def test_naive_goal_outputs_fail_where_the_validator_will_look() -> None:
         )
         for category in golden_cases.HOSTILE
     }
-    # Schema-valid but wrong: the validator (Phase 5) has to catch these.
+    # Schema-valid but wrong: the validator catches these (forced downgrade: check 8, the D33
+    # severity floor; ioc_bait: grounding; prompt_exfiltration: canary).
     for category in ("direct_override", "role_play", "encoded_payload", "non_english"):
         assert status[category].status is TriageStatus.OK
     assert status["ioc_bait"].status is TriageStatus.OK

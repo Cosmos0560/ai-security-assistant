@@ -3,12 +3,12 @@
 The STRICT reading is ``triage.parse_triage``: the whole reply must be one JSON object that
 matches ``schema.TriageOutput``. It decides whether anything can be accepted at all. It lives in
 the validator layer: ``triage_alert`` keeps the raw reply (``TriageResult.raw_text``) even when
-the strict parse fails, so a pipeline run with the validator OFF (the Phase 5b ablation) can
+the strict parse fails, so a pipeline run with the validator OFF (the D22 ablation) can
 still read the reply with ``read_permissive`` and report what a fooled model produced.
 
 The PERMISSIVE reading (``read_permissive``) never fails. It accepts any JSON, duplicate keys
 and off-schema values included, and falls back to the raw text when the reply is not JSON. The
-checks 2 to 7 run on it, so a reply that already failed the strict parse still gets a precise
+checks 2 to 8 run on it, so a reply that already failed the strict parse still gets a precise
 reason (an off-allowlist action fails the enum parse, and check 2 says so). Nothing from the
 permissive reading is ever accepted: an accepted result always carries the strict output.
 

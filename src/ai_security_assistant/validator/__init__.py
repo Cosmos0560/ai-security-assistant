@@ -1,4 +1,4 @@
-"""The output validator (D12): seven ordered checks, fail closed to ``needs_human_review``.
+"""The output validator (D12): eight ordered checks, fail closed to ``needs_human_review``.
 
 Input: the ``TriageResult`` (its ``raw_text`` included) and the ORIGINAL ``Alert``, plus the
 run's canary. Checks, in order:
@@ -9,7 +9,8 @@ run's canary. Checks, in order:
 4. ``grounding`` every IP, domain, URL and hash in the output appears in the alert;
 5. ``canary``    the run's canary is not in the reply (``detector/canary.py`` matching);
 6. ``limits``    the reply and every string in it are within the length limits;
-7. ``secrets``   the vendored secret-scanner finds nothing in the reply.
+7. ``secrets``   the vendored secret-scanner finds nothing in the reply;
+8. ``severity``  the severity is not below the floor from the source's own severity (D33).
 
 Every check runs, and every failure is reported, so a reply that already failed the strict parse
 still gets precise reasons from the permissive reading (see ``validator/schema.py``). Any failed
@@ -21,7 +22,7 @@ Reason codes are machine-readable, ``<check>.<rule>``: the check name and a rule
 set (for check 7, a vendored scanner rule id). They never contain text from the reply or the
 alert.
 
-The validator is optional by design (the Phase 5b ablation): with it OFF, a pipeline reads the
+The validator is optional by design (the D22 ablation): with it OFF, ``pipeline.py`` reads the
 reply with ``read_permissive`` and reports whatever the model produced.
 """
 
@@ -36,7 +37,15 @@ from ai_security_assistant.detector.canary import canary_leaked
 from ai_security_assistant.models import Alert
 from ai_security_assistant.schema import TriageOutput
 from ai_security_assistant.triage import TriageResult
-from ai_security_assistant.validator import actions, grounding, limits, mitre, schema, secrets
+from ai_security_assistant.validator import (
+    actions,
+    grounding,
+    limits,
+    mitre,
+    schema,
+    secrets,
+    severity,
+)
 from ai_security_assistant.validator.schema import (
     Context,
     PermissiveOutput,
@@ -84,6 +93,7 @@ CHECKS: tuple[tuple[str, Check], ...] = (
     ("canary", check_canary),
     ("limits", limits.check),
     ("secrets", secrets.check),
+    ("severity", severity.check),
 )
 
 

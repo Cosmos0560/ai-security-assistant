@@ -116,12 +116,13 @@ def test_fixture_alerts_all_pass_the_detector(
 
 
 def test_without_dry_run_the_default_mock_provider_runs(
-    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["triage", str(ALL_FIXTURES[0])]) == 0
+    assert main(["triage", "--out-dir", str(tmp_path), str(ALL_FIXTURES[0])]) == 0
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert json.loads(captured.out)["provider"] == "mock"
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["provider"] == "mock"
 
 
 def test_input_errors_exit_2_with_ascii_stderr(
