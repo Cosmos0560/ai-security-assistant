@@ -149,6 +149,61 @@ def test_hygiene_problems(gate: ModuleType) -> None:
     assert gate.hygiene_problems(["README.md", "src/codex.py", "docs/agents-notes.md"]) == []
 
 
+# ---------------------------------------------------------------- detector independence (D16)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import ai_security_assistant.detector.heuristics",
+        "import ai_security_assistant.detector.heuristics as h",
+        "from ai_security_assistant.detector.heuristics import RULES",
+        "from ai_security_assistant.detector import canary",
+        "from ai_security_assistant import detector",
+        "from ai_security_assistant import detector as d",
+        "from .. import detector",
+        "from ..detector import canary",
+        "from ..detector.heuristics import RULES",
+        "import importlib\nimportlib.import_module('ai_security_assistant.detector.canary')",
+        "__import__('ai_security_assistant.detector')",
+        "def f():\n    from ai_security_assistant.detector.canary import new_canary",
+    ],
+)
+def test_detector_import_is_flagged(gate: ModuleType, source: str) -> None:
+    assert len(gate.check_no_detector_import(source, "x.py")) == 1
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from ai_security_assistant.wrap import unwrap",
+        "from ai_security_assistant import wrap",
+        "from ai_security_assistant.schema import Severity",
+        "import re\nre.compile('detector')",
+        "x = 'detector'",
+        "import importlib\nimportlib.import_module('ai_security_assistant.wrap')",
+        "from .naive_rules import extract_directives",
+        "print('detector')",
+    ],
+)
+def test_other_imports_are_allowed(gate: ModuleType, source: str) -> None:
+    assert gate.check_no_detector_import(source, "x.py") == []
+
+
+def test_the_two_mock_modules_are_checked_and_clean(gate: ModuleType) -> None:
+    assert gate.INDEPENDENT_OF_DETECTOR == (
+        "src/ai_security_assistant/providers/mock.py",
+        "src/ai_security_assistant/providers/naive_rules.py",
+    )
+    for rel in gate.INDEPENDENT_OF_DETECTOR:
+        assert gate.ROOT.joinpath(rel).is_file()
+    assert gate.check_detector_independence() == []
+
+
+def test_the_independence_check_is_part_of_the_gate(gate: ModuleType) -> None:
+    assert gate.check_detector_independence in [check for _name, check in gate.CHECKS]
+
+
 def test_gate_accepts_no_flags(gate: ModuleType) -> None:
     with pytest.raises(SystemExit) as exc:
         gate.main(["--live"])

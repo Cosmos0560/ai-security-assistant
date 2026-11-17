@@ -78,7 +78,11 @@ def test_pyproject_guardrails() -> None:
     data = tomllib.loads(read("pyproject.toml"))
     assert data["project"]["requires-python"] == ">=3.11"
     assert data["project"]["dependencies"] == ["pydantic>=2,<3"]
-    assert set(data["project"]["optional-dependencies"]) == {"dev"}
+    extras = data["project"]["optional-dependencies"]
+    assert set(extras) == {"dev", "anthropic"}
+    # D17/D18: the SDK is its own extra; the dev extra (what CI installs) never pulls it in.
+    assert [e for e in extras["anthropic"] if e.startswith("anthropic")]
+    assert not [e for e in extras["dev"] if "anthropic" in e]
     assert data["tool"]["ruff"]["extend-exclude"] == [".venv-wsl", ".venv-release"]
     assert data["tool"]["pytest"]["ini_options"]["testpaths"] == ["tests"]
     assert data["tool"]["mypy"] == {"strict": True, "files": ["src"], "python_version": "3.11"}

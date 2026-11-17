@@ -115,11 +115,13 @@ def test_fixture_alerts_all_pass_the_detector(
         assert entry["detector"]["decision"] == "pass", entry["detector"]
 
 
-def test_dry_run_is_required_for_now(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["triage", str(ALL_FIXTURES[0])]) == 2
+def test_without_dry_run_the_default_mock_provider_runs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["triage", str(ALL_FIXTURES[0])]) == 0
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "--dry-run" in captured.err
+    assert captured.err == ""
+    assert json.loads(captured.out)["provider"] == "mock"
 
 
 def test_input_errors_exit_2_with_ascii_stderr(

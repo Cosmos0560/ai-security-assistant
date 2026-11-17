@@ -20,6 +20,8 @@ classifiers = [
 dependencies = ["pydantic>=2,<3"]
 
 [project.optional-dependencies]
+# D17: the real provider. Imported lazily; the test suite and CI never install or import it.
+anthropic = ["anthropic>=0.40"]
 dev = [
     "pytest",
     "pytest-cov",

@@ -103,6 +103,61 @@ def check_ast_ban() -> list[str]:
     return problems
 
 
+# --------------------------------------------------------------------------- independence (D16)
+
+# The naive mock's obedience patterns must not come from the detector, so the circularity that
+# D16 rules out cannot creep in through an import.
+INDEPENDENT_OF_DETECTOR = (
+    "src/ai_security_assistant/providers/mock.py",
+    "src/ai_security_assistant/providers/naive_rules.py",
+)
+FORBIDDEN_PACKAGE = "detector"
+
+
+def check_no_detector_import(source: str, filename: str = "<src>") -> list[str]:
+    """One message per way ``source`` could reach the ``detector`` package."""
+    tree = ast.parse(source, filename=filename)
+    problems: list[str] = []
+
+    def add(node: ast.AST, what: str) -> None:
+        problems.append(f"{filename}:{getattr(node, 'lineno', 0)}: {what}")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if FORBIDDEN_PACKAGE in alias.name.split("."):
+                    add(node, f"import of {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if FORBIDDEN_PACKAGE in module.split("."):
+                add(node, f"import from {'.' * node.level}{module}")
+            # "from ai_security_assistant import detector" and "from .. import detector"
+            elif not module or module == "ai_security_assistant":
+                for alias in node.names:
+                    if alias.name == FORBIDDEN_PACKAGE:
+                        add(node, f"import of {alias.name}")
+        elif (
+            isinstance(node, ast.Call)
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and FORBIDDEN_PACKAGE in node.args[0].value.split(".")
+        ):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            if name in {"import_module", "__import__"}:
+                add(node, f"dynamic import of {node.args[0].value}")
+    return problems
+
+
+def check_detector_independence() -> list[str]:
+    problems: list[str] = []
+    for rel in INDEPENDENT_OF_DETECTOR:
+        path = ROOT / rel
+        problems.extend(check_no_detector_import(path.read_text(encoding="utf-8"), rel))
+    return problems
+
+
 # --------------------------------------------------------------------------- secret and email scan
 
 # Patterns are built from parts so that this file never contains a match (D30).
@@ -248,6 +303,7 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
     ("mypy (src, strict)", check_types),
     ("pytest + coverage", check_tests),
     ("AST ban (execution primitives)", check_ast_ban),
+    ("mock providers do not import the detector", check_detector_independence),
     ("secret and email scan", check_secret_scan),
     ("graph output not staged, ignored", check_graph),
     ("commit hygiene", check_hygiene),
