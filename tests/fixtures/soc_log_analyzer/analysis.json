@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "tool_version": "1.0.0",
+  "kind": "analysis",
+  "timezone": "UTC",
+  "sources": [
+    {
+      "path": "examples/sample_auth.log",
+      "log_type": "auth",
+      "events": 40,
+      "skipped_lines": 0
+    }
+  ],
+  "summary": {
+    "events": 40,
+    "skipped_lines": 0,
+    "alerts": 3,
+    "suppressed_alerts": 0,
+    "by_severity": {
+      "CRITICAL": 0,
+      "HIGH": 2,
+      "MEDIUM": 1,
+      "LOW": 0
+    }
+  },
+  "alerts": [
+    {
+      "alert_type": "brute_force",
+      "severity": "HIGH",
+      "description": "Possible brute-force login attempt",
+      "timestamp": "2026-08-10T14:20:24+00:00",
+      "source_ip": "192.0.2.66",
+      "username": null,
+      "details": {
+        "failed_attempts": 12,
+        "window_minutes": 5,
+        "usernames_tried": [
+          "admin",
+          "root",
+          "svc-test"
+        ]
+      }
+    },
+    {
+      "alert_type": "suspicious_request",
+      "severity": "MEDIUM",
+      "description": "Suspicious request matching a known attack pattern",
+      "timestamp": "2026-08-10T14:00:00+00:00",
+      "source_ip": "203.0.113.7",
+      "username": null,
+      "details": {
+        "path": "/download?file=../../etc/passwd",
+        "method": "GET",
+        "status": 404
+      }
+    },
+    {
+      "alert_type": "privilege_escalation_attempt",
+      "severity": "HIGH",
+      "description": "Repeated failed sudo attempts",
+      "timestamp": "2026-08-10T09:06:10+00:00",
+      "source_ip": null,
+      "username": "svc-test",
+      "details": {
+        "failed_attempts": 4,
+        "window_minutes": 5
+      }
+    }
+  ]
+}

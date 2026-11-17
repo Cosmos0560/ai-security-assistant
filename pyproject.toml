@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "ai-security-assistant"
 dynamic = ["version"]
 description = "CLI assistant that triages synthetic SOC alerts with an LLM, with a defense layer against indirect prompt injection."
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Otabek Yakubov" }]
