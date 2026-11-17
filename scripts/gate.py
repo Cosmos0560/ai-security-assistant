@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Project gate, checks up to Phase 6.
+"""Project gate, final state (Phase 7): the default checks, plus ``--full`` for the release check.
 
 Stdlib only (plus the project's own vendored, stdlib-only secret-scanner). No shell pipes. Same
 behaviour on Windows and in WSL. Prints one line per check and exits non-zero on the first
@@ -9,6 +9,12 @@ The gate is phase-aware (D31): a check is added in the phase that creates its
 artifact, and there is no "skip if file missing" logic. The gate's own scan
 patterns are assembled at runtime from parts, so this file never matches itself
 (D30). All hashing and byte-exact comparison goes through ``normalize_lf`` (D29).
+
+``--full`` (PLAN section 6) adds the release check after the default checks: build the wheel,
+install it into a freshly recreated ``.venv-release`` (``--release-python`` picks the interpreter,
+for example the minimum supported 3.11), run the end-to-end eval from the INSTALLED package and a
+CLI smoke test. It downloads build and runtime dependencies from PyPI and nothing else. There is
+still no flag that enables live tests or live API calls.
 """
 
 from __future__ import annotations
@@ -22,10 +28,14 @@ import importlib
 import importlib.util
 import ipaddress
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
+import zipfile
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from types import ModuleType
@@ -682,9 +692,9 @@ def check_hygiene() -> list[str]:
 # --------------------------------------------------------------------------- external tools
 
 
-def run_tool(args: Sequence[str]) -> list[str]:
+def run_tool(args: Sequence[str], cwd: Path = ROOT) -> list[str]:
     print(f"     $ {' '.join(args[1:])}", flush=True)
-    result = subprocess.run(list(args), cwd=ROOT, check=False)
+    result = subprocess.run(list(args), cwd=cwd, check=False)
     return [] if result.returncode == 0 else [f"exit code {result.returncode}"]
 
 
@@ -723,6 +733,195 @@ def check_tests() -> list[str]:
     )
 
 
+# --------------------------------------------------------------------------- --full [P7]
+
+RELEASE_VENV = ROOT / ".venv-release"
+PACKAGE = "ai_security_assistant"
+INIT_FILE = SRC / PACKAGE / "__init__.py"
+MIN_PYTHON = (3, 11)
+WHEEL_MUST_CONTAIN = (
+    f"{PACKAGE}/data/eval/alerts.jsonl",
+    f"{PACKAGE}/data/mitre_allowlist.json",
+    f"{PACKAGE}/third_party/secret_scanner/VERSION",
+    f"{PACKAGE}/third_party/secret_scanner/MANIFEST.sha256",
+)
+WHEEL_FORBIDDEN_TOPS = frozenset({"tests", "scripts", "examples", "docs", "graphify-out"})
+SMOKE_TRIAGED = ROOT / "tests" / "fixtures" / "mini_siem" / "alerts.jsonl"
+SMOKE_REVIEW = ROOT / "examples" / "demo" / "soc_log_analyzer.json"
+_VERSION_RE = re.compile(r'^__version__ = "([0-9]+\.[0-9]+\.[0-9]+)"$', re.MULTILINE)
+
+
+def package_version(init_text: str) -> str:
+    found = _VERSION_RE.search(init_text)
+    if found is None:
+        raise ValueError("no __version__ in the package __init__")
+    return found.group(1)
+
+
+def wheel_name(version: str) -> str:
+    return f"{PACKAGE}-{version}-py3-none-any.whl"
+
+
+def wheel_problems(names: Iterable[str], version: str) -> list[str]:
+    """What is wrong with a wheel whose members are ``names``."""
+    listed = set(names)
+    problems = [f"wheel lacks {member}" for member in WHEEL_MUST_CONTAIN if member not in listed]
+    metadata = f"{PACKAGE}-{version}.dist-info/METADATA"
+    if metadata not in listed:
+        problems.append(f"wheel lacks {metadata}")
+    for name in sorted(listed):
+        if name.split("/")[0] in WHEEL_FORBIDDEN_TOPS or name.endswith(".pyc"):
+            problems.append(f"wheel must not contain {name}")
+    return problems
+
+
+def venv_bin(venv: Path, name: str, windows: bool = os.name == "nt") -> Path:
+    """An executable inside ``venv`` (``Scripts/x.exe`` on Windows, ``bin/x`` elsewhere)."""
+    return venv / "Scripts" / f"{name}.exe" if windows else venv / "bin" / name
+
+
+def smoke_env(environ: dict[str, str]) -> dict[str, str]:
+    """The environment for the release runs: never an API key, never the live opt-in."""
+    return {k: v for k, v in environ.items() if k not in {"ANTHROPIC_API_KEY", "AISA_LIVE"}}
+
+
+def _run(args: Sequence[object], cwd: Path) -> subprocess.CompletedProcess[str]:
+    shown = " ".join(str(a) for a in args[1:])
+    print(f"     $ {Path(str(args[0])).name} {shown}", flush=True)
+    return subprocess.run(
+        [str(a) for a in args],
+        cwd=cwd,
+        env=smoke_env(dict(os.environ)),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+def expect_exit(result: subprocess.CompletedProcess[str], code: int, what: str) -> list[str]:
+    if result.returncode == code:
+        return []
+    tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ["(no output)"]
+    return [f"{what}: exit {result.returncode}, expected {code} ({tail[0][:200]})"]
+
+
+class Release:
+    """State shared by the ``--full`` steps: a scratch folder, the wheel and the release venv."""
+
+    def __init__(self, scratch: Path, python: str) -> None:
+        self.scratch = scratch
+        self.python = python
+        self.version = package_version(INIT_FILE.read_text(encoding="utf-8"))
+        self.wheel: Path | None = None
+        self.venv_python = venv_bin(RELEASE_VENV, "python")
+        self.aisa = venv_bin(RELEASE_VENV, "aisa")
+
+    def build_wheel(self) -> list[str]:
+        dist = self.scratch / "dist"
+        problems = run_tool([sys.executable, "-m", "build", "--wheel", "--outdir", str(dist)])
+        if problems:
+            return problems
+        wheels = sorted(w.name for w in dist.glob("*.whl"))
+        if wheels != [wheel_name(self.version)]:
+            return [f"expected exactly {wheel_name(self.version)}, got {wheels}"]
+        self.wheel = dist / wheels[0]
+        with zipfile.ZipFile(self.wheel) as archive:
+            return wheel_problems(archive.namelist(), self.version)
+
+    def install(self) -> list[str]:
+        if self.wheel is None:
+            return ["no wheel was built"]
+        if RELEASE_VENV.exists():
+            shutil.rmtree(RELEASE_VENV)  # recreated on every run (PLAN section 6)
+        problems = run_tool([self.python, "-m", "venv", str(RELEASE_VENV)])
+        if problems:
+            return problems
+        probe = _run(
+            [self.venv_python, "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"],
+            self.scratch,
+        )
+        if probe.returncode != 0:
+            return expect_exit(probe, 0, "release venv python")
+        found = probe.stdout.strip()
+        print(f"     release venv: Python {found}", flush=True)
+        if tuple(int(part) for part in found.split(".")[:2]) < MIN_PYTHON:
+            return [f"release venv Python {found} is below the minimum {MIN_PYTHON}"]
+        install = [str(self.venv_python), "-m", "pip", "install", "--quiet"]
+        return run_tool([*install, "--disable-pip-version-check", str(self.wheel)], self.scratch)
+
+    def installed_eval(self) -> list[str]:
+        code = f"import {PACKAGE}; print({PACKAGE}.__file__)"
+        where = _run([self.venv_python, "-c", code], self.scratch)
+        problems = expect_exit(where, 0, "import from the release venv")
+        if problems:
+            return problems
+        location = Path(where.stdout.strip()).resolve()
+        if RELEASE_VENV.resolve() not in location.parents:
+            return [f"the package was imported from {location}, not from the release venv"]
+        metrics = self.scratch / "metrics.json"
+        problems = expect_exit(_run([self.aisa, "eval", "--out", metrics], self.scratch), 0, "eval")
+        if not problems and not metrics.is_file():
+            problems.append("aisa eval wrote no metrics file")
+        if problems:
+            return problems
+        # The installed package must reproduce the committed README numbers byte for byte.
+        check = [self.venv_python, "-m", README_TABLE_MODULE, "--check", README]
+        return expect_exit(_run(check, self.scratch), 0, "README metrics from the installed wheel")
+
+    def cli_smoke(self) -> list[str]:
+        version = _run([self.aisa, "--version"], self.scratch)
+        problems = expect_exit(version, 0, "aisa --version")
+        if version.stdout.strip() != f"aisa {self.version}":
+            problems.append(f"aisa --version printed {version.stdout.strip()!r}")
+        for label, fixture, provider, code in (
+            ("triaged", SMOKE_TRIAGED, "mock", 0),
+            ("review", SMOKE_REVIEW, "mock-naive", 3),
+        ):
+            out = self.scratch / f"reports-{label}"
+            args = [self.aisa, "triage", fixture, "--provider", provider, "--out-dir", out]
+            problems += expect_exit(_run(args, self.scratch), code, f"triage ({label})")
+            for name in ("report.md", "report.json"):
+                if not (out / name).is_file():
+                    problems.append(f"triage ({label}) wrote no {name}")
+            # Existing reports are never overwritten without --force.
+            problems += expect_exit(_run(args, self.scratch), 2, f"triage ({label}) again")
+        demo = self.scratch / "reports-review" / "report.md"
+        if demo.is_file() and "severity\\.downgrade" not in demo.read_text(encoding="utf-8"):
+            problems.append("the demo report lacks the severity.downgrade reason code")
+        missing = [self.aisa, "triage", self.scratch / "missing.json"]
+        problems += expect_exit(_run(missing, self.scratch), 2, "triage of a missing file")
+        live_out = self.scratch / "reports-live"
+        live = [
+            self.aisa,
+            "triage",
+            SMOKE_TRIAGED,
+            "--provider",
+            "anthropic",
+            "--out-dir",
+            live_out,
+        ]
+        problems += expect_exit(_run(live, self.scratch), 2, "anthropic without a key or extra")
+        return problems
+
+
+def run_full(release_python: str) -> int:
+    with tempfile.TemporaryDirectory(prefix="aisa-gate-full-") as tmp:
+        release = Release(Path(tmp), release_python)
+        return run_checks(
+            [
+                ("--full: build the wheel", release.build_wheel),
+                ("--full: install it into a recreated .venv-release", release.install),
+                ("--full: end-to-end eval from the installed package", release.installed_eval),
+                (
+                    "--full: CLI smoke test (version, triage, exit codes, reports)",
+                    release.cli_smoke,
+                ),
+            ]
+        )
+
+
 # --------------------------------------------------------------------------- runner
 
 CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
@@ -740,10 +939,8 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
 ]
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    # No options on purpose: the gate has no flag that could enable live tests.
-    argparse.ArgumentParser(prog="gate.py", description="Run the project gate.").parse_args(argv)
-    for name, check in CHECKS:
+def run_checks(checks: Sequence[tuple[str, Callable[[], list[str]]]]) -> int:
+    for name, check in checks:
         print(f"[gate] {name}", flush=True)
         try:
             problems = check()
@@ -755,7 +952,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"[gate] FAILED at: {name}")
             return 1
         print(f"  ok   {name}", flush=True)
-    print("[gate] all checks passed")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    # Only the release check is optional; no flag can enable live tests or live API calls.
+    parser = argparse.ArgumentParser(prog="gate.py", description="Run the project gate.")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="also build the wheel, install it into a recreated .venv-release and smoke-test it",
+    )
+    parser.add_argument(
+        "--release-python",
+        default=sys.executable,
+        metavar="PYTHON",
+        help="interpreter for .venv-release with --full (default: the one running the gate)",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if run_checks(CHECKS) != 0:
+        return 1
+    if args.full and run_full(args.release_python) != 0:
+        return 1
+    print("[gate] all checks passed" + (" (with --full)" if args.full else ""))
     return 0
 
 
