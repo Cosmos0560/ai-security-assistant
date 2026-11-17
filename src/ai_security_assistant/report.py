@@ -55,6 +55,11 @@ RAW_CAP: Final = 65_536  # report.json with include_raw only
 _MD_PUNCTUATION: Final = frozenset(string.punctuation)
 _WWW_RE: Final = re.compile(r"www\.", re.IGNORECASE)
 NONE_TEXT: Final = "(none)"
+# TB4 human factor: the summary is the one free-text field the validator cannot judge
+# (summary_manipulation, D34), so the analyst is told where it came from every time.
+SUMMARY_LABEL: Final = (
+    "Summary (model-generated from untrusted data; verify against the alert fields)"
+)
 
 
 class ReportExistsError(Exception):
@@ -234,7 +239,7 @@ def _verdict_md(verdict: AcceptedVerdict | None) -> list[str]:
         f"  - MITRE technique: {md_text(verdict.mitre_technique, SHORT_CAP)}",
         f"  - Recommended actions: {action_text}",
         f"  - Confidence: {NONE_TEXT if confidence is None else f'{confidence:.2f}'}",
-        f"  - Summary: {md_text(verdict.summary, SUMMARY_CAP)}",
+        f"  - {SUMMARY_LABEL}: {md_text(verdict.summary, SUMMARY_CAP)}",
         f"  - Validated: {origin}",
     ]
 

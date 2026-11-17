@@ -249,6 +249,23 @@ def test_a_prose_verdict_is_marked() -> None:
     assert "Detector: off" in md
 
 
+def test_every_model_summary_is_labelled_as_untrusted() -> None:
+    # TB4 human factor: the validator cannot judge the summary's wording (D34), so every
+    # model-written summary carries its provenance, validated or not, hostile or not.
+    validated = AcceptedVerdict("high", "T1110", "routine check", ("monitor",), 0.5, validated=True)
+    outcomes = (
+        AlertOutcome(ALERT, Status.TRIAGED, validated, (), None, True),
+        *hostile_run().outcomes,
+    )
+    run = RunResult(DefenseConfig.ALL, "m", "1", outcomes, 3, 3)
+    md = render_markdown(run, generated_at=NOW, input_name="x")
+    summaries = [line for line in md.split("\n") if "Summary" in line and line.startswith("  - ")]
+    assert len(summaries) == 2  # one per verdict; the review outcome has none
+    for line in summaries:
+        assert line.startswith(f"  - {report.SUMMARY_LABEL}: ")
+    assert "model-generated from untrusted data; verify against the alert fields" in md
+
+
 def test_an_empty_run_still_renders() -> None:
     run = RunResult(DefenseConfig.ALL, "mock", "1", (), 0, 20)
     md = render_markdown(run, generated_at=NOW, input_name="empty.json")

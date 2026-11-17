@@ -34,7 +34,7 @@ The assistant only recommends; a human decides. Every value taken from an alert 
   - MITRE technique: T1110
   - Recommended actions: monitor, collect\_logs
   - Confidence: 0.80
-  - Summary: Rule 5760 \(sshd\: authentication failed\.\) on host web01\.example\.test for user svc\-test source 192\.0\.2\.66\: triaged from the alert fields only\.
+  - Summary (model-generated from untrusted data; verify against the alert fields): Rule 5760 \(sshd\: authentication failed\.\) on host web01\.example\.test for user svc\-test source 192\.0\.2\.66\: triaged from the alert fields only\.
   - Validated: yes
 
 ### Alert 2: triaged
@@ -50,7 +50,7 @@ The assistant only recommends; a human decides. Every value taken from an alert 
   - MITRE technique: T1548
   - Recommended actions: monitor
   - Confidence: 0.80
-  - Summary: Rule 5402 \(Successful sudo to ROOT executed\.\) on host db01\.example\.test for user root\: triaged from the alert fields only\.
+  - Summary (model-generated from untrusted data; verify against the alert fields): Rule 5402 \(Successful sudo to ROOT executed\.\) on host db01\.example\.test for user root\: triaged from the alert fields only\.
   - Validated: yes
 
 ### Alert 3: triaged
@@ -66,7 +66,7 @@ The assistant only recommends; a human decides. Every value taken from an alert 
   - MITRE technique: T1190
   - Recommended actions: investigate, collect\_logs
   - Confidence: 0.80
-  - Summary: Rule 86601 \(Suricata\: alert \- web probe\.\) on host edge01\.example\.test source 198\.51\.100\.77 destination 203\.0\.113\.30\: triaged from the alert fields only\.
+  - Summary (model-generated from untrusted data; verify against the alert fields): Rule 86601 \(Suricata\: alert \- web probe\.\) on host edge01\.example\.test source 198\.51\.100\.77 destination 203\.0\.113\.30\: triaged from the alert fields only\.
   - Validated: yes
 
 ### Alert 4: triaged
@@ -82,7 +82,7 @@ The assistant only recommends; a human decides. Every value taken from an alert 
   - MITRE technique: T1110
   - Recommended actions: investigate, escalate\_to\_analyst, block\_ip
   - Confidence: 0.80
-  - Summary: Rule ssh\-bruteforce \(SSH brute force from 192\.0\.2\.66\) source 192\.0\.2\.66\: triaged from the alert fields only\.
+  - Summary (model-generated from untrusted data; verify against the alert fields): Rule ssh\-bruteforce \(SSH brute force from 192\.0\.2\.66\) source 192\.0\.2\.66\: triaged from the alert fields only\.
   - Validated: yes
 
 ### Alert 5: triaged
@@ -98,7 +98,7 @@ The assistant only recommends; a human decides. Every value taken from an alert 
   - MITRE technique: T1110
   - Recommended actions: investigate, escalate\_to\_analyst, block\_ip
   - Confidence: 0.80
-  - Summary: Rule brute\_force \(brute\_force\) source 192\.0\.2\.66\: triaged from the alert fields only\.
+  - Summary (model-generated from untrusted data; verify against the alert fields): Rule brute\_force \(brute\_force\) source 192\.0\.2\.66\: triaged from the alert fields only\.
   - Validated: yes
 
 ### Alert 6: needs\_human\_review
