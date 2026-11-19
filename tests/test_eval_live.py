@@ -91,6 +91,20 @@ def test_the_live_eval_never_overwrites(
     assert stand_in == []
 
 
+def test_an_existing_samples_file_is_never_overwritten(
+    stand_in: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "m.json"
+    samples = tmp_path / "m.samples.json"
+    assert cli.samples_path(out) == samples
+    samples.write_text("earlier samples", encoding="utf-8")
+    assert cli.main(live(out, "--max-calls", "480")) == 2
+    assert "never overwrites" in capsys.readouterr().err
+    assert samples.read_text(encoding="utf-8") == "earlier samples"
+    assert not out.exists()
+    assert stand_in == []
+
+
 def test_a_missing_results_folder_is_refused_before_any_call(
     stand_in: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -113,9 +127,10 @@ def test_a_failed_write_keeps_the_paid_results_on_stdout(
     monkeypatch.setattr(cli, "make_provider", racing_provider)
     assert cli.main(live(out, "--max-calls", str(4 * SUBSET))) == 2
     captured = capsys.readouterr()
-    assert "metrics are on stdout" in captured.err
-    assert json.loads(captured.out)["dataset"]["alerts"] == SUBSET
+    assert "unwritten ones are on stdout" in captured.err
+    assert json.loads(captured.out)["dataset"]["alerts"] == SUBSET  # only the metrics were lost
     assert out.read_text(encoding="utf-8") == "written by someone else"
+    assert json.loads(cli.samples_path(out).read_text(encoding="ascii"))["configs"]
 
 
 def test_the_readme_is_never_a_live_target(
@@ -159,6 +174,10 @@ def test_a_full_budget_run_writes_the_results(
     printed = capsys.readouterr().out
     assert f"of {4 * SUBSET} calls" in printed
     assert "incomplete" not in printed
+    samples = json.loads((tmp_path / "live.samples.json").read_text(encoding="ascii"))
+    assert "live.samples.json" in printed
+    assert set(samples["configs"]) == {c.label for c in DefenseConfig}
+    assert all(len(rows) == SUBSET for rows in samples["configs"].values())
 
 
 def test_a_short_budget_is_reported_as_incomplete(

@@ -19,7 +19,9 @@ or writes it to ``--out``; ``--readme`` rewrites the generated metrics block of 
 ``aisa eval --provider anthropic --max-calls N --out FILE`` is the optional LIVE eval
 (docs/LIVE_EVAL.md). It spends real money, so it runs only with ``AISA_LIVE=1`` and a key, needs an
 explicit call budget and a results file that does not exist yet, and refuses ``--readme``: the
-README table is mock-only. The gate, the tests and CI never run it.
+README table is mock-only. Next to ``FILE`` it also writes ``<stem>.samples.json``: per sample and
+configuration, the status, reason codes and booleans only (no model or alert text). The gate, the
+tests and CI never run it.
 
 Exit codes (PLAN section 2): 0 every alert triaged; 3 at least one alert needs human review or
 hit the call budget; 2 usage, input or provider-setup error, or a report that would be
@@ -39,7 +41,7 @@ from pathlib import Path
 from ai_security_assistant import __version__
 from ai_security_assistant.detector.heuristics import detect
 from ai_security_assistant.eval.dataset import load_dataset
-from ai_security_assistant.eval.metrics import compute_metrics
+from ai_security_assistant.eval.metrics import compute_metrics, per_sample
 from ai_security_assistant.eval.readme_table import MarkerError, render_block, replace_block
 from ai_security_assistant.eval.runner import EvalRun, run_eval, run_live_eval
 from ai_security_assistant.ingest import FORMATS, IngestError, load_alerts
@@ -241,6 +243,21 @@ def _exhausted(run: EvalRun) -> int:
     return sum(1 for r in run.naive for o in r.outcomes if o.status is Status.BUDGET_EXHAUSTED)
 
 
+def samples_path(out: Path) -> Path:
+    """Where the live eval writes its per-sample codes: next to ``out``, ``<stem>.samples.json``."""
+    return out.with_name(f"{out.stem}.samples.json")
+
+
+def _write_new(path: Path, text: str) -> bool:
+    """Write ``text`` to a file that must not exist yet; False if that is not possible."""
+    try:
+        with path.open("x", encoding="ascii", newline="\n") as handle:
+            handle.write(text)
+    except OSError:
+        return False
+    return True
+
+
 def _live_eval(args: argparse.Namespace) -> int:
     """The optional live eval (docs/LIVE_EVAL.md). Every guard runs before the provider is built."""
     if os.environ.get(LIVE_ENV) != "1":
@@ -252,8 +269,12 @@ def _live_eval(args: argparse.Namespace) -> int:
     if not args.max_calls:
         return _error("the live eval needs --max-calls (480 covers 120 alerts x 4 configurations)")
     out: Path = args.out
-    if out.exists():
-        return _error(f"{safe_repr(str(out), 200)} exists; the live eval never overwrites results")
+    samples = samples_path(out)
+    for path in (out, samples):
+        if path.exists():
+            return _error(
+                f"{safe_repr(str(path), 200)} exists; the live eval never overwrites results"
+            )
     if not out.parent.is_dir():
         return _error(f"{safe_repr(str(out.parent), 200)} is not a directory")
     budget = CallBudget(args.max_calls)
@@ -263,16 +284,17 @@ def _live_eval(args: argparse.Namespace) -> int:
         return _error(str(exc))
     run = run_live_eval(load_dataset(), provider, budget)
     metrics = compute_metrics(run)
-    try:
-        with out.open("x", encoding="ascii", newline="\n") as handle:
-            handle.write(metrics_json(metrics))
-    except OSError:
+    documents = ((out, metrics_json(metrics)), (samples, metrics_json(per_sample(run))))
+    unwritten = [text for path, text in documents if not _write_new(path, text)]
+    if unwritten:
         # The calls are already paid for: keep the results on stdout rather than lose them.
-        print(metrics_json(metrics), end="")
-        return _error("cannot write the live eval results file; the metrics are on stdout")
+        for text in unwritten:
+            print(text, end="")
+        return _error("cannot write the live eval results; the unwritten ones are on stdout")
     print(f"aisa: live eval used {budget.used} of {budget.max_calls} calls")
     print(_attack_line(metrics))
     print(f"aisa: wrote {terminal_safe(out.as_posix())}")
+    print(f"aisa: wrote {terminal_safe(samples.as_posix())}")
     exhausted = _exhausted(run)
     if exhausted:
         print(f"aisa: {exhausted} alert runs hit the call budget; the results are incomplete")

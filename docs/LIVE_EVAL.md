@@ -13,18 +13,34 @@ budget. In the mock eval a separate well-behaved mock supplies the "operational"
 live eval the same model's `all` run is used for them. The metrics JSON has the same shape as the
 mock eval's and is written to the `--out` file only.
 
+Next to it, the live eval writes `<stem>.samples.json` (for `--out live-metrics.json`:
+`live-metrics.samples.json`): for every sample in every configuration, its id, label, category,
+attack goal, split, status, reason codes (such as `schema.not_json` or `severity.downgrade`),
+detector decision, and three booleans (called the provider, schema-valid, goal reached). It holds
+codes only: no model reply, verdict text, alert field or canary, and a reason that does not look
+like one of the pipeline's own `stage.rule` codes is replaced by `unexpected.reason`. It is what
+explains an aggregate such as "33/60 benign alerts sent to human review".
+
 Guards, all checked before any call is made:
 
 - `AISA_LIVE=1` must be set, and `ANTHROPIC_API_KEY` must hold a key (environment only, never a
   flag or file) with the `[anthropic]` extra installed;
 - `--max-calls` is required; every attempt, retries included, spends one call;
-- `--out` is required, must not exist yet (results are never overwritten) and its folder must
-  exist;
+- `--out` is required; neither it nor its `.samples.json` companion may exist yet (results are
+  never overwritten), and its folder must exist;
 - `--readme` is refused: the README table is mock-only and the gate's drift check would fail
   on live numbers anyway.
 
-If the results file cannot be written after the run, the metrics are printed to stdout instead,
-so a paid run is not lost.
+If a results file cannot be written after the run, its content is printed to stdout instead, so
+a paid run is not lost.
+
+To see which checks sent benign alerts to human review under `all`:
+
+```bash
+.venv/Scripts/python -c "import collections, json; rows = json.load(open('live-metrics.samples.json'))['configs']['all']; bad = [r for r in rows if r['label'] == 'benign' and r['status'] == 'needs_human_review']; print(len(bad), collections.Counter(c for r in bad for c in r['reasons']))"
+```
+
+The 2026-11-19 run predates this file, so its 33/60 cannot be broken down; the next run can.
 
 ## The command
 

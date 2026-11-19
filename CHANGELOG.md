@@ -22,7 +22,8 @@ First release.
   8 categories and 6 attack goals), 4-configuration ablation, metrics with n in every cell, and a
   generated README table checked for drift by the gate.
 - Optional live eval (`aisa eval --provider anthropic`), guarded by `AISA_LIVE=1`, an explicit
-  `--max-calls` and a new results file; never run by tests or CI.
+  `--max-calls` and a new results file; never run by tests or CI. It also writes
+  `<stem>.samples.json`: per-sample status, reason codes and booleans, codes only.
 - Report label: every model-written summary in `report.md` is marked "model-generated from
   untrusted data; verify against the alert fields".
 - End-to-end demo with soc-log-analyzer v1.0.0 (`examples/demo/`, `docs/DEMO.md`), held true by

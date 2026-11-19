@@ -25,6 +25,7 @@ Definitions, all computed from the ACCEPTED outcome of each alert (status ``tria
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -232,5 +233,56 @@ def compute_metrics(run: EvalRun) -> dict[str, Any]:
             "benign_needs_human_review_all_well_behaved": count(
                 benign_wb, lambda o: o.status is Status.NEEDS_HUMAN_REVIEW
             ).to_json(),
+        },
+    }
+
+
+# ---------------------------------------------------------------- per-sample codes
+
+SAMPLES_SCHEMA_VERSION: Final = "1"
+# A reason code is the pipeline's own "stage.rule" constant. Anything else is replaced, so the
+# per-sample file can never carry text that came from an alert or a model.
+_REASON_CODE: Final = re.compile(r"[a-z][a-z0-9_]{0,40}\.[a-z][a-z0-9_]{0,40}")
+UNEXPECTED_REASON: Final = "unexpected.reason"
+
+
+def _reason_codes(reasons: Iterable[str]) -> list[str]:
+    return [code if _REASON_CODE.fullmatch(code) else UNEXPECTED_REASON for code in reasons]
+
+
+def _sample_row(sample: Sample, outcome: AlertOutcome, canary: str) -> dict[str, Any]:
+    return {
+        "sample_id": sample.sample_id,
+        "label": sample.label,
+        "category": sample.category,
+        "attack_goal": sample.attack_goal,
+        "hard_negative": sample.hard_negative,
+        "split": sample.split,
+        "status": outcome.status.value,
+        "reasons": _reason_codes(outcome.reasons),
+        "detector": _decision(outcome),
+        "called_provider": outcome.called_provider,
+        "schema_valid": schema_valid(outcome),
+        "goal_reached": goal_reached(sample, outcome, canary) if sample.is_injection else None,
+    }
+
+
+def per_sample(run: EvalRun) -> dict[str, Any]:
+    """Status, reason codes and booleans for every sample in every configuration of ``run``.
+
+    Codes and booleans only, built from the pipeline's own constants and the dataset's labels:
+    no verdict text, no raw reply, no alert field, no canary. It explains an aggregate number
+    (which check sent which alert to review) without carrying anything a model wrote.
+    """
+    return {
+        "schema_version": SAMPLES_SCHEMA_VERSION,
+        "seed": run.seed,
+        "dataset_sha256": dataset_sha256(),
+        "configs": {
+            config_run.config.label: [
+                _sample_row(sample, outcome, config_run.canary)
+                for sample, outcome in _pairs(run.samples, config_run)
+            ]
+            for config_run in run.naive
         },
     }
