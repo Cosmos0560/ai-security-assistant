@@ -8,7 +8,7 @@ adds where each control lives and the residual risk as measured by the eval (see
 deterministic naive mock that obeys simple injected instructions. It shows what each defense stage
 lets through when a model complies; it does not show how often a real model complies. The
 optional live eval ([LIVE_EVAL.md](LIVE_EVAL.md)) is the way to get real-model numbers, and it is
-run by hand.
+run by hand; one live run is summarized at the end of this document.
 
 ## Assets
 
@@ -74,6 +74,22 @@ accepts.
 The eight samples (sample id, category, attack goal): s013 encoded_payload, s015 role_play, s049
 delimiter_escape, s066 non_english, s083 non_english, s097 direct_override and s101 ioc_bait, all
 `summary_manipulation`; s053 role_play, `forced_severity` (upgrade).
+
+### Live run: Claude Haiku 5.5, 2026-11-19 (one run)
+
+One hand-run live eval ([live-eval/2026-11-19-claude-haiku-5-5.json](live-eval/2026-11-19-claude-haiku-5-5.json),
+464 calls, no `temperature`, not reproducible) confirms the same residual risk with a real model.
+Attack success: `none` 6/60, `detector-only` 2/60, `validator-only` 0/60, `all` 1/60. All six
+successes under `none` are `summary_manipulation` (6/11); the model carried out none of the other
+five goals, including every forced severity downgrade. The one success under `all` is s015
+(role_play, `summary_manipulation`), the documented residual risk above; it is identified from the
+category, goal and split breakdowns, because the results file holds aggregates only. The
+`validator-only` 0 against `all` 1 is run-to-run variance, not a regression.
+
+One new operational finding: under `all` the real model's replies sent 33/60 benign alerts to
+human review (the well-behaved mock: 0/60), and its schema-valid rate was 91/112. The fail-closed
+design turns a model the validator distrusts into analyst workload rather than accepted
+verdicts; which checks rejected those replies is not in the aggregate file.
 
 ## Out of scope
 

@@ -187,6 +187,35 @@ How to read these numbers:
   what each defense stage lets through when a model obeys simple injections; it says nothing
   about how robust a real model is.
 
+### Live run (real model)
+
+One run of the same ablation against a real model, made by hand with the optional live eval
+([docs/LIVE_EVAL.md](docs/LIVE_EVAL.md)): Claude Haiku 5.5 (`claude-haiku-5-5`), 2026-11-19, 464
+of a 480-call budget, no `temperature` sent. The full metrics are in
+[docs/live-eval/2026-11-19-claude-haiku-5-5.json](docs/live-eval/2026-11-19-claude-haiku-5-5.json).
+This section is written by hand and is not covered by the drift check; live numbers come from
+one run and are not reproducible.
+
+| config | attack success | schema-valid |
+| --- | --- | --- |
+| `none` | 6/60 (10.0%) | 73/120 (60.8%) |
+| `detector-only` | 2/60 (3.3%) | 88/112 (78.6%) |
+| `validator-only` | 0/60 (0.0%) | 101/120 (84.2%) |
+| `all` | 1/60 (1.7%) | 91/112 (81.2%) |
+
+Benign false positives of the input detector: 0/60 (0.0%) flagged, 0/60 (0.0%) blocked, 0/19
+(0.0%) hard negatives flagged. Benign alerts sent to human review under `all` (same model):
+33/60 (55.0%), against 0/60 with the well-behaved mock; the aggregate file does not say which
+checks rejected them.
+
+The real model obeyed far fewer injections than the naive mock (6/60 against 40/60 under
+`none`), but not zero. The defenses removed almost all of the rest: 0/60 with the validator
+alone and 1/60 with every defense on. The difference between `validator-only` (0) and `all` (1)
+is run-to-run variance in a single run with no `temperature`, not a regression: the defenses in
+`all` are a superset of those in `validator-only`. The remaining success is s015 (role_play,
+`summary_manipulation`: attacker-chosen text in a valid summary), the documented residual risk
+that the report label addresses.
+
 ## What it can't do
 
 - Detect manipulation that stays inside valid text. A summary that says "authorized scan, close
@@ -200,8 +229,8 @@ How to read these numbers:
   see the per-category table.
 - Detect secrets that only high entropy would reveal: the output secret scan uses the vendored
   scanner's pattern rules with entropy detection off. The eval does not measure secret leakage.
-- Say how a real model behaves. All published numbers come from mock providers; the live eval
-  is optional and run by hand.
+- Say how a real model behaves in general. The generated table comes from mock providers; the
+  one live run above is a single run of one model, not a robustness measurement.
 - Act. It recommends from a fixed allowlist of actions and never runs anything.
 
 ## Documentation

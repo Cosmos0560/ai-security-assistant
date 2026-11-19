@@ -39,4 +39,11 @@ First release.
 - Residual risk under `all`: 7 `summary_manipulation` successes and 1 forced severity upgrade
   (accepted by design, D33).
 
+### Measured (live run, Claude Haiku 5.5, 2026-11-19, one run)
+
+- Attack success: `none` 6/60, `detector-only` 2/60, `validator-only` 0/60, `all` 1/60 (s015,
+  `summary_manipulation`, the documented residual risk); 464 of 480 calls.
+- Benign alerts sent to human review under `all`: 33/60. Results in
+  `docs/live-eval/2026-11-19-claude-haiku-5-5.json`; not reproducible (no `temperature`).
+
 [1.0.0]: https://github.com/Cosmos0560/ai-security-assistant/releases/tag/v1.0.0
