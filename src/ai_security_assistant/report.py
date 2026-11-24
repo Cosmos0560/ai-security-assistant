@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+from ai_security_assistant.kb import ReferenceFacts
 from ai_security_assistant.pipeline import AcceptedVerdict, AlertOutcome, DetectorSummary, RunResult
 from ai_security_assistant.sanitize import TRUNCATION_MARKER, normalize_text
 
@@ -60,6 +61,9 @@ NONE_TEXT: Final = "(none)"
 SUMMARY_LABEL: Final = (
     "Summary (model-generated from untrusted data; verify against the alert fields)"
 )
+# D40: the reference facts come from a fixed table, not from the alert or the model. They are shown
+# apart from the summary so the analyst can read the true meaning next to the model's words.
+FACTS_CAP: Final = 600
 
 
 class ReportExistsError(Exception):
@@ -167,6 +171,7 @@ def _alert_json(index: int, outcome: AlertOutcome, include_raw: bool) -> dict[st
         "detector": _detector_json(outcome.detector),
         "provider_called": outcome.called_provider,
         "verdict": _verdict_json(outcome.verdict),
+        "reference_facts": None if outcome.facts is None else outcome.facts.to_dict(),
     }
     if include_raw:
         raw = outcome.raw_text
@@ -244,6 +249,39 @@ def _verdict_md(verdict: AcceptedVerdict | None) -> list[str]:
     ]
 
 
+def _facts_md(facts: ReferenceFacts | None) -> list[str]:
+    """The facts section (table text, escaped anyway). Empty when no table key matched."""
+    if facts is None:
+        return []
+    labels = {
+        "event": "Event",
+        "logon_type": "Logon Type",
+        "status": "Status",
+        "sub_status": "SubStatus",
+    }
+    lines = [f"- Reference facts (from KB {md_text(facts.kb_version, SHORT_CAP)}):"]
+    for fact in facts.facts:
+        head = f"{labels[fact.kind]} {fact.code} ({fact.name})"
+        lines.append(f"  - {md_text(head, FACTS_CAP)}: {md_text(fact.meaning, FACTS_CAP)}")
+        if fact.never_records:
+            never = "; ".join(fact.never_records)
+            lines.append(f"    - It never records: {md_text(never, FACTS_CAP)}")
+    pattern = facts.pattern
+    if pattern is not None:
+        technique = "" if pattern.technique is None else f" ({pattern.technique})"
+        counts = (
+            f"distinct users {pattern.distinct_users}, most attempts by one user "
+            f"{pattern.max_attempts_per_user}, failed logons {pattern.attempts}, "
+            f"within {pattern.window_seconds} seconds"
+        )
+        label = md_text(pattern.pattern + technique, FACTS_CAP)
+        lines.append(
+            f"  - Failed logons from this source address: {label}"
+            f": {md_text(pattern.meaning, FACTS_CAP)} ({md_text(counts, FACTS_CAP)})"
+        )
+    return lines
+
+
 def _alert_md(index: int, outcome: AlertOutcome) -> list[str]:
     alert = outcome.alert
     floor = outcome.severity_floor
@@ -258,6 +296,7 @@ def _alert_md(index: int, outcome: AlertOutcome) -> list[str]:
         f" (floor: {NONE_TEXT if floor is None else md_text(floor, SHORT_CAP)})",
         f"- Reason codes: {reasons}",
         f"- Detector: {_detector_md(outcome.detector)}",
+        *_facts_md(outcome.facts),
         *_verdict_md(outcome.verdict),
         "",
     ]

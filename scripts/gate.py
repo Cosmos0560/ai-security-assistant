@@ -635,6 +635,97 @@ def check_dataset() -> list[str]:
     return dataset_problems(DATASET.read_bytes().decode("utf-8"))
 
 
+# --------------------------------------------------------------------------- Windows KB (P9)
+
+KB_FILE = SRC / "ai_security_assistant" / "data" / "windows_kb.json"
+KB_REQUIRED = {
+    "events": ("4624", "4625", "4634", "4648", "4672", "4688", "4720", "4740"),
+    "logon_types": ("2", "3", "4", "5", "7", "8", "9", "10", "11"),
+    "statuses": (
+        "0xC000006D",
+        "0xC000006A",
+        "0xC0000064",
+        "0xC0000234",
+        "0xC0000072",
+        "0xC000015B",
+        "0xC0000071",
+        "0xC0000193",
+    ),
+}
+KB_PATTERN_KEYS = {
+    "password_spraying": ("technique", "min_distinct_users", "max_attempts_per_user", "meaning"),
+    "brute_force": ("technique", "distinct_users", "min_attempts", "meaning"),
+    "undetermined": ("meaning",),
+}
+_KB_EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+")
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _value in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+
+
+def kb_problems(text: str) -> list[str]:
+    """Invariants of ``windows_kb.json`` (D39), checked with the standard library only: schema
+    shape, every required event, logon type and status present, unique codes, no alias shared by
+    two entries of one table, thresholds present, no email-shaped string."""
+    try:
+        document = json.loads(text, object_pairs_hook=_no_duplicate_keys)
+    except ValueError as exc:
+        return [f"windows_kb.json is not valid JSON with unique keys ({exc})"]
+    if not isinstance(document, dict):
+        return ["windows_kb.json is not an object"]
+    problems: list[str] = []
+    if document.get("schema_version") != 1:
+        problems.append("schema_version must be 1")
+    if not re.fullmatch(r"[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,3}", str(document.get("kb_version"))):
+        problems.append("kb_version must look like 2026.11.1")
+    for table, required in KB_REQUIRED.items():
+        entries = document.get(table)
+        if not isinstance(entries, dict):
+            problems.append(f"{table} is missing")
+            continue
+        for code in required:
+            if code not in entries:
+                problems.append(f"{table}: required entry {code} is missing")
+        seen: dict[str, str] = {}
+        for code, entry in entries.items():
+            if not isinstance(entry, dict):
+                problems.append(f"{table}.{code}: not an object")
+                continue
+            for key in ("name", "meaning", "source"):
+                if not isinstance(entry.get(key), str) or not entry[key]:
+                    problems.append(f"{table}.{code}: {key} is missing")
+            aliases = entry.get("aliases")
+            if not isinstance(aliases, list) or not aliases:
+                problems.append(f"{table}.{code}: aliases are missing")
+                continue
+            for alias in aliases:
+                folded = str(alias).casefold()
+                if folded in seen:
+                    problems.append(f"{table}: alias {alias!r} names {seen[folded]} and {code}")
+                seen[folded] = code
+    patterns = document.get("patterns")
+    if not isinstance(patterns, dict):
+        problems.append("patterns are missing")
+    else:
+        if not isinstance(patterns.get("window_seconds"), int):
+            problems.append("patterns.window_seconds is missing")
+        for name, keys in KB_PATTERN_KEYS.items():
+            rule = patterns.get(name)
+            if not isinstance(rule, dict) or any(key not in rule for key in keys):
+                problems.append(f"patterns.{name} needs {', '.join(keys)}")
+    if _KB_EMAIL_RE.search(text):
+        problems.append("windows_kb.json holds an email-shaped string")
+    return problems
+
+
+def check_kb() -> list[str]:
+    return kb_problems(normalize_lf(KB_FILE.read_bytes()).decode("utf-8"))
+
+
 # --------------------------------------------------------------------------- README metrics (P6)
 
 README = ROOT / "README.md"
@@ -1032,6 +1123,7 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
     ("secret and email scan (own + vendored patterns, allowlist)", check_secret_scan),
     ("vendor integrity (manifest, version)", check_vendor_integrity),
     ("eval dataset invariants", check_dataset),
+    ("Windows KB invariants", check_kb),
     ("README metrics block matches the eval", check_readme_metrics),
     ("graph output not staged, ignored", check_graph),
     ("commit hygiene (no AGENTS.md, .codex, .env)", check_hygiene),

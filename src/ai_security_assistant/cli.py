@@ -55,6 +55,8 @@ from ai_security_assistant.eval.readme_table import MarkerError, render_block, r
 from ai_security_assistant.eval.runner import EvalRun, run_eval, run_live_eval
 from ai_security_assistant.ingest import FORMATS, IngestError, load_alerts
 from ai_security_assistant.ingest.base import safe_repr
+from ai_security_assistant.kb import KbError, PatternFact, load_kb, reference_facts
+from ai_security_assistant.kb.patterns import batch_patterns
 from ai_security_assistant.models import Alert
 from ai_security_assistant.pipeline import DefenseConfig, RunResult, Status, run_pipeline
 from ai_security_assistant.providers import PROVIDER_NAMES, CallBudget, make_provider
@@ -180,14 +182,17 @@ def _error(message: str) -> int:
     return EXIT_INPUT_ERROR
 
 
-def _dry_run_entry(alert: Alert) -> dict[str, object]:
-    """The normalized alert plus what the input-side defenses make of it (Phase 3)."""
+def _dry_run_entry(alert: Alert, pattern: PatternFact | None = None) -> dict[str, object]:
+    """The normalized alert plus what the input-side defenses make of it (Phase 3), and the
+    trusted reference facts (Phase 9) the model would be given."""
     sanitized, report = sanitize_alert(alert)
     result = detect(sanitized, report)
+    facts = reference_facts(alert, pattern)
     return {
         **alert.model_dump(mode="json"),
         "sanitize": report.to_dict(),
         "detector": result.to_dict(),
+        "reference_facts": None if facts is None else facts.to_dict(),
     }
 
 
@@ -207,8 +212,13 @@ def _triage(args: argparse.Namespace, clock: Callable[[], datetime]) -> int:
         alerts = load_alerts(args.file, args.format)
     except IngestError as exc:
         return _error(f"{safe_repr(str(args.file), 200)}: {exc}")
+    try:
+        load_kb()  # fail before any alert is touched, like the provider health check
+    except KbError as exc:
+        return _error(str(exc))
     if args.dry_run:
-        document = [_dry_run_entry(alert) for alert in alerts]
+        patterns = batch_patterns(alerts)
+        document = [_dry_run_entry(alert, patterns.get(i)) for i, alert in enumerate(alerts)]
         print(json.dumps(document, indent=2, ensure_ascii=True, allow_nan=False))
         return EXIT_OK
     out_dir: Path = args.out_dir

@@ -22,6 +22,11 @@ EXPECTED_UNTRUSTED = (
     "command_line",
     "url",
     "user_agent",
+    "event_id",
+    "logon_type",
+    "status",
+    "sub_status",
+    "target_user",
     "message",
 )
 

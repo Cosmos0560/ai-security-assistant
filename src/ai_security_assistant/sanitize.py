@@ -52,6 +52,11 @@ FIELD_CAPS: Final[Mapping[str, int]] = {
     "url": 2048,
     "user_agent": 512,
     "message": 2048,
+    "event_id": 16,
+    "logon_type": 16,
+    "status": 32,
+    "sub_status": 32,
+    "target_user": 128,
 }
 
 # Work bound for a single field before normalization (NFKC can expand a character, up to 18x).

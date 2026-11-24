@@ -839,7 +839,16 @@ file:
 The pattern is attached as a trusted fact to every alert in the group. The eval computes it over
 the full dataset file, so a `--limit` or resumed run sees the same facts. Residual risk: usernames
 are untrusted, so an attacker who writes the log can make a group look like either pattern. The
-fact is evidence, not a verdict, and is documented as such. Rejected: asking the model to infer
+fact is evidence, not a verdict, and is documented as such. Phase 9 details (owner-approved):
+the window is `patterns.window_seconds` in the KB file (3600), anchored at the group's first
+event (an event joins the open group when it is at most that long after the first one); only
+failed logons with a parsed `src_ip` and a usable user name (not empty, not `-`; trimmed and
+case-folded) are counted, and any other alert gets no pattern fact; loopback addresses are kept
+as written and never make a pattern without real user and attempt counts; the fact shows only
+integers (distinct users, most attempts by one user, failed logons) and never a user name.
+Known blind spots, recorded for the README "What it can't do" list: distributed spraying (the
+same few passwords from many source addresses gives one small `undetermined` group per
+address) and low-and-slow spraying slower than the window. Rejected: asking the model to infer
 the pattern from one alert (it cannot see the other events); cross-run state (the CLI stays
 stateless).
 
@@ -959,7 +968,7 @@ Exit codes do not change.
 |---|--------|----------|---------------|
 | T12 | The model hallucinates or misstates a Windows fact (event, logon type, status) | KB as trusted context (D40), check 9 (D42), reference facts in the report | Paraphrased misstatement with no code nearby |
 | T13 | Local endpoint redirection: alert data sent to a non-local host through config, `OLLAMA_HOST`, a proxy or a redirect | Loopback-only URL, empty proxy handler, redirects refused (D37) | A malicious process already listening on the loopback port |
-| T14 | KB key spoofing: the log writer picks a different real code or fakes usernames to shape D41 | Strict formats, facts are table text only, pattern is evidence not a verdict | A chosen real code gets its true but misleading facts |
+| T14 | KB key spoofing: the log writer picks a different real code or fakes usernames to shape D41 | Strict formats, facts are table text only, pattern is evidence not a verdict | Distributed and low-and-slow spraying are not seen (D41 blind spots). A chosen real code gets its true but misleading facts |
 | T15 | Slow local model as a DoS on the run | Per-call timeout, call budget, no retries, resumable eval | A long batch is slow by nature on CPU |
 
 OWASP rows to update: LLM09 (adds D39–D42), LLM10 (adds the D37 timeout and no-retry rules),
@@ -1036,8 +1045,13 @@ says otherwise.
   - "0xC000006A … logon type not granted" is rejected; 0xC000006A as "correct user, bad
     password" is accepted;
   - a lockout claimed on a 0xC000006A alert (0xC0000234) is rejected as ungrounded; a 4740
-    alert described as a lockout is accepted; "event 4625 (account locked out)" is rejected as a
-    contradiction;
+    alert described as a lockout is accepted; a 4625 alert with 0xC0000234 described as "account
+    locked out" is ACCEPTED (owner review, Phase 9: the 4625 page logs an attempt on a locked-out
+    account as 4625 with that status, and 4740 is only the moment the account gets locked), while
+    "event 4625" followed by the 4740 entry's own alias ("user account was locked out") is a
+    contradiction. Aliases are unique inside one table (events, logon types, statuses) and are
+    compared inside one table only. Longest alias wins when one alias contains another
+    ("interactive" inside "remote interactive", "network" inside "network cleartext");
   - "the attempted password was …" on a 4625 alert is rejected; the string is built at runtime;
   - a spraying group triaged as T1110.001 is rejected and as T1110.003 accepted, and the reverse
     for brute force;
@@ -1099,8 +1113,10 @@ version 2 and the Windows set (paid, about $0.2–0.3) so the Haiku column has n
     - "Why the LLM is never trusted with lookups", with the observed hallucination and how D39–D42
       catch it;
     - the Windows mock metrics;
-    - new "What it can't do" items: paraphrased misstatements, D41 username spoofing, CPU
-      latency;
+    - new "What it can't do" items: paraphrased misstatements, D41 username spoofing, D41
+      blind spots (distributed spraying across many source addresses, low-and-slow spraying
+      slower than the window), CPU latency, a prompt too long for `num_ctx` is refused (not
+      truncated);
   - `docs/THREAT_MODEL.md` (T12–T15); `docs/OWASP_LLM_2025.md`; `CHANGELOG.md` (1.1.0);
     `__version__` 1.1.0; `gate.py --full` (also runs the Windows mock eval from the installed
     wheel, and the wheel must contain `windows_kb.json` and `windows_auth.jsonl`).

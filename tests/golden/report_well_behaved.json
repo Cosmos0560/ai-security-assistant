@@ -11,6 +11,7 @@
       "index": 1,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "5760",
       "severity_floor": "low",
       "source": "wazuh",
@@ -41,6 +42,7 @@
       "index": 2,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "5402",
       "severity_floor": "info",
       "source": "wazuh",
@@ -70,6 +72,7 @@
       "index": 3,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -100,6 +103,7 @@
       "index": 4,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "ssh-bruteforce",
       "severity_floor": "high",
       "source": "mini-siem",
@@ -131,6 +135,7 @@
       "index": 5,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "brute_force",
       "severity_floor": "high",
       "source": "soc-log-analyzer",
@@ -168,6 +173,7 @@
       "reason_codes": [
         "detector.block"
       ],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -191,6 +197,7 @@
       "index": 7,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -227,6 +234,7 @@
       "reason_codes": [
         "detector.block"
       ],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -249,6 +257,7 @@
       "index": 9,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -286,6 +295,7 @@
       "reason_codes": [
         "detector.block"
       ],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -304,6 +314,7 @@
       "index": 11,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -341,6 +352,7 @@
       "reason_codes": [
         "detector.block"
       ],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -359,6 +371,7 @@
       "index": 13,
       "provider_called": true,
       "reason_codes": [],
+      "reference_facts": null,
       "rule_id": "86601",
       "severity_floor": "medium",
       "source": "wazuh",
@@ -398,7 +411,7 @@
   "generated_at": "2026-01-02T03:04:05Z",
   "include_raw": false,
   "input": "golden-cases.jsonl",
-  "prompt_version": "1",
+  "prompt_version": "2",
   "provider": "mock",
   "schema_version": "1"
 }

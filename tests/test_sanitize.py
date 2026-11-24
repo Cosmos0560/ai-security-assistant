@@ -338,6 +338,11 @@ def test_sanitize_alert_covers_exactly_the_fields_the_model_marks_untrusted() ->
         url="http://example.com/",
         user_agent="curl/8",
         message="hello",
+        event_id="4625",
+        logon_type="3",
+        status="0xC000006D",
+        sub_status="0xC000006A",
+        target_user="alice",
     )
     sanitized, report = sanitize_alert(alert)
     assert tuple(sanitized.fields) == untrusted_fields()

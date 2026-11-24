@@ -162,7 +162,8 @@ def read_block(user: str) -> dict[str, str | None]:
     if first is None:
         raise ProviderError("mock could not find the data block")
     try:
-        return unwrap(user, first.group(1))
+        # The trusted reference block (D40) may sit in front of the boundary line; it is not data.
+        return unwrap(user[first.start() :], first.group(1))
     except WrapError:
         raise ProviderError("mock could not read the data block") from None
 

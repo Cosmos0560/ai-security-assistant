@@ -15,6 +15,8 @@ from typing import Final
 
 from ai_security_assistant.detector.canary import new_canary
 from ai_security_assistant.ingest import load_alerts
+from ai_security_assistant.kb import reference_facts
+from ai_security_assistant.kb.patterns import batch_patterns
 from ai_security_assistant.models import Alert
 from ai_security_assistant.pipeline import RunResult, run_pipeline
 from ai_security_assistant.prompt import build_system_prompt, build_user_prompt
@@ -88,6 +90,25 @@ def user_prompt(alert: Alert) -> str:
     return build_user_prompt(sanitized, new_nonce(SEED))
 
 
+def windows_alerts() -> list[Alert]:
+    """The four synthetic Windows Security records (Phase 9), in fixture order."""
+    return load_alerts(FIXTURES / "wazuh" / "windows_events.jsonl", None)
+
+
+def render_windows_prompts() -> str:
+    """The prompts of the Windows records: the trusted reference block, then the data block."""
+    alerts = windows_alerts()
+    patterns = batch_patterns(alerts)
+    lines = ["=== system prompt ===", system_prompt()]
+    for index, alert in enumerate(alerts):
+        sanitized, _report = sanitize_alert(alert)
+        user = build_user_prompt(
+            sanitized, new_nonce(SEED), reference_facts(alert, patterns.get(index))
+        )
+        lines += [f"=== user prompt: windows-{index} ===", user]
+    return "\n".join(lines) + "\n"
+
+
 def cases() -> list[tuple[str, Alert]]:
     named = [(f"benign-{i}", alert) for i, alert in enumerate(benign_alerts())]
     return named + [(f"hostile-{name}", hostile_alert(name)) for name in HOSTILE]
@@ -130,6 +151,7 @@ def render_goldens() -> dict[str, str]:
     """Golden file name to the text it must hold."""
     return {
         "prompts.txt": render_prompts(),
+        "prompts_windows.txt": render_windows_prompts(),
         "mock_well_behaved.jsonl": _render_mock("well_behaved"),
         "mock_naive.jsonl": _render_mock("naive"),
         "report_well_behaved.md": _render_report("well_behaved", "md"),

@@ -27,6 +27,10 @@ def test_prompts_match_the_golden_file() -> None:
     assert golden_cases.render_prompts() == read_golden("prompts.txt")
 
 
+def test_windows_prompts_match_the_golden_file() -> None:
+    assert golden_cases.render_windows_prompts() == read_golden("prompts_windows.txt")
+
+
 def test_the_system_prompt_is_a_pure_function_of_the_canary() -> None:
     canary = new_canary("a")
     assert build_system_prompt(canary) == build_system_prompt(canary)

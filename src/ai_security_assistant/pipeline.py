@@ -40,6 +40,8 @@ from typing import Final
 
 from ai_security_assistant.detector.canary import new_canary
 from ai_security_assistant.detector.heuristics import DetectionResult, detect
+from ai_security_assistant.kb import PatternFact, ReferenceFacts, reference_facts
+from ai_security_assistant.kb.patterns import batch_patterns
 from ai_security_assistant.models import Alert
 from ai_security_assistant.prompt import (
     NAIVE_PROMPT_VERSION,
@@ -177,6 +179,9 @@ class AlertOutcome:
     # The provider's reply as it came (None if there was none). Untrusted; only report.json with
     # --include-raw shows it, never report.md, and repr never does.
     raw_text: str | None = field(default=None, repr=False)
+    # Trusted Windows reference facts for this alert (D40); None when the config is ``none`` or no
+    # table key matched. Table text and counted integers only, never alert text.
+    facts: ReferenceFacts | None = None
 
     @property
     def severity_floor(self) -> str | None:
@@ -243,12 +248,19 @@ def run_alert(
     system: str,
     canary: str,
     nonce: str,
+    pattern: PatternFact | None = None,
 ) -> AlertOutcome:
-    """One alert through the stages ``config`` switches on. Never raises for a bad reply."""
+    """One alert through the stages ``config`` switches on. Never raises for a bad reply.
+
+    ``pattern`` is the alert's batch fact (D41). Reference facts are input preparation (D22): on
+    in every configuration except ``none``.
+    """
     detector: DetectorSummary | None = None
+    facts: ReferenceFacts | None = None
     if config.sanitize_wrap:
+        facts = reference_facts(alert, pattern)
         sanitized, report = sanitize_alert(alert)
-        user = build_user_prompt(sanitized, nonce)
+        user = build_user_prompt(sanitized, nonce, facts)
         if config.detector:
             detection = detect(sanitized, report)
             detector = DetectorSummary.from_result(detection)
@@ -260,6 +272,7 @@ def run_alert(
                     reasons=(REASON_DETECTOR_BLOCK,),
                     detector=detector,
                     called_provider=False,
+                    facts=facts,
                 )
     else:
         user = plain_prompt(alert)
@@ -273,6 +286,7 @@ def run_alert(
         detector=detector,
         called_provider=result.status is not TriageStatus.BUDGET_EXHAUSTED,
         raw_text=result.raw_text,
+        facts=facts,
     )
 
 
@@ -290,9 +304,20 @@ def run_pipeline(
     canary = new_canary(seed)
     nonce = new_nonce(seed)
     system, prompt_version = system_prompt_for(config, canary)
+    batch = list(alerts)
+    # D41: the pattern of a source address needs the whole batch, so it is computed before the loop.
+    patterns = batch_patterns(batch) if config.sanitize_wrap else {}
     outcomes: Sequence[AlertOutcome] = [
-        run_alert(alert, provider, config=config, system=system, canary=canary, nonce=nonce)
-        for alert in alerts
+        run_alert(
+            alert,
+            provider,
+            config=config,
+            system=system,
+            canary=canary,
+            nonce=nonce,
+            pattern=patterns.get(index),
+        )
+        for index, alert in enumerate(batch)
     ]
     return RunResult(
         config=config,

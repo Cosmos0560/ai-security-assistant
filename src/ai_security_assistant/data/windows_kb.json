@@ -1,0 +1,309 @@
+{
+  "schema_version": 1,
+  "kb_version": "2026.11.1",
+  "about": "Windows Security log facts for the trusted reference block (D39, D40) and validator check 9 (D42). Every entry is a short paraphrase of Microsoft's documentation, with a source. Codes missing from this table fail closed. Extend by hand, with a source for each entry.",
+  "events": {
+    "4624": {
+      "name": "An account was successfully logged on",
+      "meaning": "A logon session was created successfully. The Logon Type field says how the logon happened.",
+      "aliases": [
+        "successful logon",
+        "successful login",
+        "successfully logged on",
+        "logon success"
+      ],
+      "never_records": [],
+      "source": "Verified against Microsoft Learn, Windows security auditing, 'Event 4624(S): An account was successfully logged on'"
+    },
+    "4625": {
+      "name": "An account failed to log on",
+      "meaning": "A logon attempt failed. The Status and SubStatus fields give the reason. An attempt against a locked-out account is also logged as 4625, with Status 0xC0000234.",
+      "aliases": [
+        "failed logon",
+        "failed login",
+        "failed to log on",
+        "logon failure",
+        "login failure"
+      ],
+      "never_records": [
+        "the attempted password"
+      ],
+      "source": "Verified against Microsoft Learn, Windows security auditing, 'Event 4625(F): An account failed to log on'"
+    },
+    "4634": {
+      "name": "An account was logged off",
+      "meaning": "A logon session ended. It is generated when a logon session is destroyed.",
+      "aliases": [
+        "logged off",
+        "logoff",
+        "log off",
+        "logout"
+      ],
+      "never_records": [],
+      "source": "Verified against Microsoft Learn, Windows security auditing, 'Event 4634(S): An account was logged off'"
+    },
+    "4648": {
+      "name": "A logon was attempted using explicit credentials",
+      "meaning": "A process tried to log on with credentials supplied explicitly, instead of the current user's credentials.",
+      "aliases": [
+        "explicit credentials",
+        "explicit credential logon"
+      ],
+      "never_records": [],
+      "source": "Verified against Microsoft Learn, Windows security auditing, 'Event 4648(S): A logon was attempted using explicit credentials'"
+    },
+    "4672": {
+      "name": "Special privileges assigned to new logon",
+      "meaning": "A new logon was given sensitive privileges (administrator-level rights such as debugging or taking ownership). Every SYSTEM logon triggers it, so it is high-volume and not suspicious on its own.",
+      "aliases": [
+        "special privileges",
+        "privileges assigned",
+        "special privilege logon"
+      ],
+      "never_records": [],
+      "source": "Verified against Microsoft Learn, Windows security auditing, 'Event 4672(S): Special privileges assigned to new logon'"
+    },
+    "4688": {
+      "name": "A new process has been created",
+      "meaning": "A process was started. The command line is recorded only when the extra audit policy for it is on.",
+      "aliases": [
+        "new process",
+        "process creation",
+        "process was created",
+        "process has been created"
+      ],
+      "never_records": [],
+      "source": "Verified against Microsoft Learn, Windows security auditing, 'Event 4688(S): A new process has been created'"
+    },
+    "4720": {
+      "name": "A user account was created",
+      "meaning": "A new local or domain user account was created.",
+      "aliases": [
+        "account was created",
+        "account creation",
+        "user account created",
+        "new user account"
+      ],
+      "never_records": [],
+      "source": "Verified against Microsoft Learn, Windows security auditing, 'Event 4720(S): A user account was created'"
+    },
+    "4740": {
+      "name": "A user account was locked out",
+      "meaning": "An account was locked out. It records the moment the account becomes locked. Later failed logons against that account are event 4625 with Status 0xC0000234.",
+      "aliases": [
+        "user account was locked out",
+        "lockout event",
+        "account lockout event"
+      ],
+      "never_records": [],
+      "source": "Verified against Microsoft Learn, Windows security auditing, 'Event 4740(S): A user account was locked out'"
+    }
+  },
+  "logon_types": {
+    "2": {
+      "name": "Interactive",
+      "meaning": "A user logged on at the keyboard and screen of this computer (the console).",
+      "aliases": [
+        "interactive",
+        "console logon",
+        "local interactive"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    },
+    "3": {
+      "name": "Network",
+      "meaning": "A user or computer logged on to this computer from the network (for example a file share).",
+      "aliases": [
+        "network",
+        "network logon",
+        "from the network",
+        "over the network"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    },
+    "4": {
+      "name": "Batch",
+      "meaning": "A batch logon: a process runs on behalf of a user without their direct intervention.",
+      "aliases": [
+        "batch",
+        "batch logon"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    },
+    "5": {
+      "name": "Service",
+      "meaning": "A service was started by the Service Control Manager.",
+      "aliases": [
+        "service",
+        "service logon"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    },
+    "7": {
+      "name": "Unlock",
+      "meaning": "This workstation was unlocked.",
+      "aliases": [
+        "unlock",
+        "unlocked",
+        "workstation unlock"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    },
+    "8": {
+      "name": "NetworkCleartext",
+      "meaning": "A user logged on from the network, and the password was passed to the authentication package in unhashed form.",
+      "aliases": [
+        "networkcleartext",
+        "network cleartext",
+        "cleartext",
+        "clear text"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    },
+    "9": {
+      "name": "NewCredentials",
+      "meaning": "A caller cloned its current token and supplied new credentials for outbound network connections. The local identity stays the same.",
+      "aliases": [
+        "newcredentials",
+        "new credentials",
+        "cloned token"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    },
+    "10": {
+      "name": "RemoteInteractive",
+      "meaning": "A user logged on to this computer remotely with Terminal Services or Remote Desktop.",
+      "aliases": [
+        "remoteinteractive",
+        "remote interactive",
+        "remote desktop",
+        "rdp",
+        "terminal services"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    },
+    "11": {
+      "name": "CachedInteractive",
+      "meaning": "A user logged on with network credentials stored locally on the computer. The domain controller was not contacted.",
+      "aliases": [
+        "cachedinteractive",
+        "cached interactive",
+        "cached credentials",
+        "cached logon"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4624(S)', Logon Type table"
+    }
+  },
+  "statuses": {
+    "0xC000006D": {
+      "name": "STATUS_LOGON_FAILURE",
+      "meaning": "Logon failure: bad username or authentication information. Commonly paired with a more specific Sub Status (for example 0xC0000064 or 0xC000006A).",
+      "aliases": [
+        "generic logon failure",
+        "bad user name or password",
+        "bad username or password",
+        "bad authentication information"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4625(F)', Status and Sub Status table"
+    },
+    "0xC000006A": {
+      "name": "STATUS_WRONG_PASSWORD",
+      "meaning": "The user name is correct but the password is wrong.",
+      "aliases": [
+        "bad password",
+        "wrong password",
+        "incorrect password",
+        "password is wrong",
+        "misspelled password"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4625(F)', Status and Sub Status table"
+    },
+    "0xC0000064": {
+      "name": "STATUS_NO_SUCH_USER",
+      "meaning": "The user name does not exist.",
+      "aliases": [
+        "no such user",
+        "user does not exist",
+        "user name does not exist",
+        "username does not exist",
+        "account does not exist",
+        "unknown user",
+        "nonexistent user",
+        "bad user account"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4625(F)', Status and Sub Status table"
+    },
+    "0xC0000234": {
+      "name": "STATUS_ACCOUNT_LOCKED_OUT",
+      "meaning": "The account is locked out.",
+      "aliases": [
+        "account locked",
+        "account locked out",
+        "account is locked",
+        "locked out"
+      ],
+      "source": "MS-SAMR 2.2.1.15 STATUS_ Codes (STATUS_ACCOUNT_LOCKED_OUT); the 'Event 4625(F)' page also lists the failure reason 'Account locked out'. Not in the 4625 Status table"
+    },
+    "0xC0000072": {
+      "name": "STATUS_ACCOUNT_DISABLED",
+      "meaning": "The account is currently disabled.",
+      "aliases": [
+        "account disabled",
+        "account is disabled",
+        "disabled account",
+        "account currently disabled"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4625(F)', Status and Sub Status table"
+    },
+    "0xC000015B": {
+      "name": "STATUS_LOGON_TYPE_NOT_GRANTED",
+      "meaning": "The user has not been granted the requested logon type (logon right) on this machine.",
+      "aliases": [
+        "logon type not granted",
+        "logon right not granted",
+        "logon type is not granted",
+        "not been granted the requested logon type"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4625(F)', Status and Sub Status table"
+    },
+    "0xC0000071": {
+      "name": "STATUS_PASSWORD_EXPIRED",
+      "meaning": "The account's password has expired.",
+      "aliases": [
+        "password expired",
+        "password has expired",
+        "expired password"
+      ],
+      "source": "NTSTATUS values list, MS-ERREF 2.3.1 (STATUS_PASSWORD_EXPIRED). Not in the 4625 Status table"
+    },
+    "0xC0000193": {
+      "name": "STATUS_ACCOUNT_EXPIRED",
+      "meaning": "The account itself has expired (account expiration, not password expiry).",
+      "aliases": [
+        "account expired",
+        "account has expired",
+        "account expiration"
+      ],
+      "source": "Verified against Microsoft Learn, 'Event 4625(F)', Status and Sub Status table"
+    }
+  },
+  "patterns": {
+    "event_id": "4625",
+    "window_seconds": 3600,
+    "password_spraying": {
+      "technique": "T1110.003",
+      "min_distinct_users": 4,
+      "max_attempts_per_user": 2,
+      "meaning": "Many different accounts, each tried only once or twice from one source address: the shape of password spraying."
+    },
+    "brute_force": {
+      "technique": "T1110.001",
+      "distinct_users": 1,
+      "min_attempts": 5,
+      "meaning": "Many attempts against a single account from one source address: the shape of password guessing (brute force)."
+    },
+    "undetermined": {
+      "meaning": "The failed logons from this source address fit neither pattern. Do not name either technique from this group alone."
+    }
+  }
+}

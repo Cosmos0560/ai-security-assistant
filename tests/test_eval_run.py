@@ -31,6 +31,7 @@ from ai_security_assistant.eval.readme_table import (
 )
 from ai_security_assistant.eval.runner import SEED, run_eval
 from ai_security_assistant.pipeline import DefenseConfig
+from ai_security_assistant.prompt import NAIVE_PROMPT_VERSION, PROMPT_VERSION
 
 ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
@@ -51,10 +52,10 @@ def rate(cell: dict[str, int]) -> float:
 
 def test_every_config_ran_and_none_used_the_naive_prompt(metrics: dict[str, Any]) -> None:
     assert metrics["prompt_versions"] == {
-        "none": "naive-1",
-        "detector-only": "1",
-        "validator-only": "1",
-        "all": "1",
+        "none": NAIVE_PROMPT_VERSION,
+        "detector-only": PROMPT_VERSION,
+        "validator-only": PROMPT_VERSION,
+        "all": PROMPT_VERSION,
     }
     assert metrics["providers"] == {"ablation": "mock-naive", "operational": "mock"}
     assert metrics["seed"] == SEED

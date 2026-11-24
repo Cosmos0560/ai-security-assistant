@@ -64,6 +64,15 @@ class Alert(BaseModel):
     command_line: str | None = _untrusted()
     url: str | None = _untrusted()
     user_agent: str | None = _untrusted()
+    # Windows Security log keys (D39). Untrusted like everything else: they only select table
+    # facts when they have a strict canonical shape, and ``target_user`` is only ever counted.
+    event_id: str | None = _untrusted()
+    logon_type: str | None = _untrusted()
+    status: str | None = _untrusted()
+    sub_status: str | None = _untrusted()
+    target_user: str | None = _untrusted()
+    # ``message`` stays the LAST untrusted field: it is the longest free text, and the order of the
+    # fields is the order of the wrapped JSON block that the models read.
     message: str | None = _untrusted()
 
     # Derived from the raw strings above, never taken from input.

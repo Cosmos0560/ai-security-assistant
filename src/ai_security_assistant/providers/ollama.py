@@ -59,6 +59,15 @@ MAX_BODY_BYTES: Final = 1024 * 1024
 SEED: Final = 20260611
 NUM_PREDICT: Final = 600
 NUM_CTX: Final = 8192
+# Ollama counts the prompt and the reply together against ``num_ctx`` and, when a prompt is too
+# long, silently drops its START: the system prompt with the trust rules and the canary. So a prompt
+# that might not fit is refused before any call (fail closed). The estimate is deliberately
+# pessimistic: the data block is ASCII-escaped JSON, and tokenizers split digits and ``\uXXXX``
+# escapes into many small tokens, so ordinary English at about 4 characters per token is the best
+# case, not the worst.
+CHARS_PER_TOKEN: Final = 2
+CHAT_OVERHEAD_TOKENS: Final = 64
+PROMPT_TOKEN_BUDGET: Final = NUM_CTX - NUM_PREDICT - CHAT_OVERHEAD_TOKENS
 
 LOOPBACK_HOSTS: Final = frozenset({"localhost", "127.0.0.1", "::1"})
 _MODEL_RE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")  # same as the Anthropic provider
@@ -222,6 +231,7 @@ class OllamaProvider:
         }
 
     def complete(self, system: str, user: str) -> str:
+        check_prompt_fits(system, user)  # before the budget: a refused prompt is not a call
         self._budget.spend()  # one attempt, one unit, and there is no second attempt
         data = json.dumps(self.request_body(system, user), ensure_ascii=True, allow_nan=False)
         request = urllib.request.Request(
@@ -240,6 +250,17 @@ class OllamaProvider:
             # The class name only: no message text, no request detail.
             raise ProviderError(f"ollama request failed ({type(exc).__name__})") from None
         return _message_content(body)
+
+
+def estimate_prompt_tokens(system: str, user: str) -> int:
+    """A pessimistic token count for one request: ``CHARS_PER_TOKEN`` characters per token."""
+    return -(-(len(system) + len(user)) // CHARS_PER_TOKEN)
+
+
+def check_prompt_fits(system: str, user: str) -> None:
+    """Raise ``ProviderError`` when the prompt might not fit ``num_ctx`` next to the reply."""
+    if estimate_prompt_tokens(system, user) > PROMPT_TOKEN_BUDGET:
+        raise ProviderError("prompt does not fit the context budget")
 
 
 def _message_content(body: bytes) -> str:

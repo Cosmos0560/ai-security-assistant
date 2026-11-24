@@ -4,7 +4,10 @@ Modelled on the public Wazuh alert structure: ``timestamp``, ``id``, ``rule`` (`
 ``level``, ``description``), ``agent`` (``name``), ``predecoder``, ``data`` and ``full_log``.
 ``data`` follows the static decoder fields (``srcip``, ``dstip``, ``srcuser``, ``dstuser``,
 ``url``, ``command``) and the Suricata-style nested ``data.http`` / ``src_ip`` / ``dest_ip``.
-Every other key is dropped (TB1). ``rule.level`` becomes the raw severity.
+Windows Security events (the ``eventchannel`` decoder) add ``data.win``: only
+``system.eventID`` and ``eventdata.{logonType,status,subStatus,targetUserName,ipAddress}`` are
+read (``ipAddress`` is a fallback source address; ``-`` means none), and every other ``win`` key is
+dropped like every other key (TB1). ``rule.level`` becomes the raw severity.
 """
 
 from __future__ import annotations
@@ -19,6 +22,11 @@ NAME = "wazuh"
 
 def _first(*values: str | None) -> str | None:
     return next((value for value in values if value is not None), None)
+
+
+def _address(value: str | None) -> str | None:
+    """A Windows source address, where ``-`` means there is none (and is then absent)."""
+    return None if value == "-" else value
 
 
 class WazuhAdapter:
@@ -49,7 +57,11 @@ class WazuhAdapter:
             severity_raw=alert.level("rule", "level"),
             host=alert.text("agent", "name"),
             user=_first(alert.text("data", "dstuser"), alert.text("data", "srcuser")),
-            src_ip_raw=_first(alert.text("data", "srcip"), alert.text("data", "src_ip")),
+            src_ip_raw=_first(
+                alert.text("data", "srcip"),
+                alert.text("data", "src_ip"),
+                _address(alert.text("data", "win", "eventdata", "ipAddress")),
+            ),
             dst_ip_raw=_first(alert.text("data", "dstip"), alert.text("data", "dest_ip")),
             process=_first(
                 alert.text("data", "audit", "exe"), alert.text("predecoder", "program_name")
@@ -60,4 +72,9 @@ class WazuhAdapter:
             url=_first(alert.text("data", "url"), alert.text("data", "http", "url")),
             user_agent=alert.text("data", "http", "http_user_agent"),
             message=alert.text("full_log"),
+            event_id=alert.text("data", "win", "system", "eventID"),
+            logon_type=alert.text("data", "win", "eventdata", "logonType"),
+            status=alert.text("data", "win", "eventdata", "status"),
+            sub_status=alert.text("data", "win", "eventdata", "subStatus"),
+            target_user=alert.text("data", "win", "eventdata", "targetUserName"),
         )

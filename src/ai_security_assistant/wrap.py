@@ -15,7 +15,10 @@ case-insensitively:
   tag-shaped marker such as ``</untrusted>``) survives in the data;
 * the first character of any text that looks like the boundary keyword (``AISA`` + ``UNTRUSTED``
   with any separators, or ``UNTRUSTED DATA/ALERT/INPUT/BLOCK``) and of any occurrence of the
-  nonce itself is written as a ``\\uXXXX`` escape.
+  nonce itself is written as a ``\\uXXXX`` escape;
+* the same goes for text that looks like the tag of the trusted reference block that sits outside
+  the boundary (``TRUSTED`` + ``REFERENCE`` with any separators, which also covers ``UNTRUSTED
+  REFERENCE``), so untrusted data cannot pose as that block (D40).
 
 Both are JSON escapes, so ``unwrap`` (a plain ``json.loads``) restores the data exactly. The
 nonce alphabet has no hex digit and no ``u``, so a nonce can never start inside a JSON escape.
@@ -41,6 +44,7 @@ _NONCE_RE: Final = re.compile(rf"[{NONCE_ALPHABET}]{{{MIN_NONCE_LENGTH},64}}")
 _FAMILY_SOURCE: Final = (
     r"a\W{0,3}i\W{0,3}s\W{0,3}a\W{0,6}u\W{0,3}n\W{0,3}t\W{0,3}r\W{0,3}u\W{0,3}s\W{0,3}t"
     r"|untrusted\W{0,6}(?:data|alert|input|block)"
+    r"|trusted\W{0,6}reference"
 )
 _FAMILY_RE: Final = re.compile(_FAMILY_SOURCE, re.IGNORECASE)
 # Zero-width lookahead variant: reports EVERY position where a family match could start, also
