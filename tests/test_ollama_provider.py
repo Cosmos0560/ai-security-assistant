@@ -413,6 +413,60 @@ def test_done_reason_may_be_absent() -> None:
     assert p.complete("s", "u") == "{}"
 
 
+def test_the_provider_tolerates_unknown_envelope_fields() -> None:
+    """Ollama adds fields between versions (the real capture has prompt_eval_cached_count)."""
+    document = json.loads(fixture("chat_wazuh_1.json"))
+    document["prompt_eval_cached_count"] = 0
+    document["a_future_field"] = {"nested": [1, 2, {"x": None}]}
+    document["message"]["a_future_message_field"] = ["x"]
+    p, _transport, budget = make(json.dumps(document).encode("ascii"))
+    result = triage_alert(p, "s", "u")
+    assert result.status is TriageStatus.OK
+    assert json.loads(result.raw_text or "")["mitre_technique"] == "T1110"
+    assert budget.used == 1
+
+
+REAL = "chat_real_status_logon.json"  # the owner's raw capture, byte-exact
+
+
+def test_the_real_envelope_is_the_untouched_capture() -> None:
+    raw = fixture(REAL)
+    assert not raw.endswith(b"\n")  # copied as captured: no newline added
+    assert b"\r" not in raw
+    envelope = json.loads(raw)
+    assert envelope["model"] == DEFAULT_MODEL
+    assert envelope["done"] is True
+    assert envelope["done_reason"] == "stop"
+    assert envelope["prompt_eval_cached_count"] == 0  # the field the documented fixtures lack
+    assert set(envelope["message"]) == {"role", "content"}
+
+
+def test_the_real_envelope_parses_end_to_end() -> None:
+    envelope = json.loads(fixture(REAL))
+    p, transport, budget = make(fixture(REAL))
+    content = p.complete("s", "u")
+    assert content == envelope["message"]["content"]  # handed over untouched
+    assert budget.used == 1
+    assert len(transport.requests) == 1
+    # The content is a valid JSON object, but not the triage schema: the strict parse refuses it.
+    p, _transport, _budget = make(fixture(REAL))
+    result = triage_alert(p, "s", "u")
+    assert (result.status, result.reason) == (TriageStatus.PARSE_FAILURE, "schema_violation")
+    assert result.raw_text == content
+    assert set(json.loads(content)) == {"status_meaning", "logon_type_10"}
+
+
+def test_the_real_reply_is_the_second_recorded_hallucination() -> None:
+    """Pinned for Phase 10 (no validator logic here): the recorded claims, and only those."""
+    reply = json.loads(json.loads(fixture(REAL))["message"]["content"])
+    assert "0xC000006A" in reply["status_meaning"]
+    assert "the account does not exist" in reply["status_meaning"]  # truth: bad password
+    assert "network logon" in reply["logon_type_10"]  # truth: RemoteInteractive
+    for text in reply.values():
+        assert "RemoteInteractive" not in text
+        assert "0xC0000064" not in text
+
+
 def test_the_provider_satisfies_the_protocol() -> None:
     p, _transport, _budget = make()
     assert isinstance(p, Provider)

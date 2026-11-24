@@ -169,6 +169,24 @@ def test_a_reply_that_is_not_the_json_object_goes_to_human_review(
     assert "0xC000006A" not in text  # the model's prose is never printed or reported
 
 
+def test_the_real_recorded_reply_goes_to_human_review_and_is_never_shown(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Valid JSON, wrong shape, and two false Windows claims: the schema check stops it."""
+    install(monkeypatch, Router("chat_real_status_logon.json"))
+    Path("one.json").write_text(WAZUH.read_text(encoding="utf-8").splitlines()[0], encoding="utf-8")
+    status, out, _err = run(["triage", "--provider", "ollama", "one.json"], capsys)
+    assert status == 3
+    entry = report()["alerts"][0]
+    assert (entry["status"], entry["reason_codes"]) == (
+        "needs_human_review",
+        ["schema.schema_violation", "actions.missing", "mitre.missing"],
+    )
+    text = out + Path("reports/report.md").read_text(encoding="utf-8") + json.dumps(report())
+    assert "network logon" not in text
+    assert "account does not exist" not in text
+
+
 def test_a_truncated_reply_goes_to_human_review(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
