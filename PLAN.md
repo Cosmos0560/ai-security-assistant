@@ -690,7 +690,7 @@ GitHub Actions, one workflow, `.github/workflows/ci.yml`.
 - Automated response of any kind.
 - ML or LLM-based injection classifier.
 - Agentic tool use, multi-turn conversations, RAG or embeddings.
-- Providers other than the mock and Anthropic.
+- Providers other than the mock and Anthropic (v1.0; v1.1 adds Ollama, D36).
 - Real alerts, real IOCs, real personal data, real attack code.
 - Streaming output, localization of the report.
 - Publishing to PyPI.
@@ -724,3 +724,416 @@ GitHub Actions, one workflow, `.github/workflows/ci.yml`.
 Questions 3–6 are closed. Questions 1 and 2 stay open until the Phase 5 and Phase 2
 prompts. Also settled: the D17 model ID `claude-haiku-5-5` is confirmed by the owner,
 with no online check needed.
+
+---
+
+## 11. v1.1.0 — Local model (Ollama) and deterministic lookups
+
+Goal: run the full pipeline on a local open-weight model through Ollama, and stop trusting the
+model with factual lookups. Windows Security facts come from a versioned table and enter the
+prompt as trusted context. The validator rejects any output that contradicts the table.
+Everything stays synthetic. Default provider stays `mock`. CI never calls a real model.
+
+### 11.1 Decisions
+
+**D36. Ollama provider over stdlib `urllib.request`, with no new dependency.**
+`providers/ollama.py` implements the existing `Provider` protocol (`complete(system, user) ->
+str`). The pipeline contract does not change. The request is `POST {base}/api/chat` with
+`stream: false`, `think: false`, `format` = `schema.tool_input_schema()` (the same schema the
+Anthropic tool call uses, so the two cannot drift), and `options` = `temperature: 0`, a fixed
+`seed`, a `num_predict` cap and a `num_ctx` cap. Ollama's structured output narrows what the
+model emits. The guarantee is still `triage.py`'s strict parse plus the validator: a `<think>`
+block, prose or a truncated reply (`done_reason: "length"`) is a parse failure. Rationale: the
+project has no HTTP client today (the Anthropic SDK is an optional extra), and stdlib keeps the
+one-runtime-dependency rule (D2). Rejected: the `ollama` Python package (pulls `httpx`, a second
+supply-chain surface for one POST); `requests`/`httpx` (same).
+
+**D37. The Ollama endpoint is loopback-only, and the transport is locked down.**
+- `OLLAMA_BASE_URL` (default `http://localhost:11434`) must be `http` or `https` with host
+  `localhost`, `127.0.0.1` or `[::1]`. No userinfo, no path, no query. Anything else is a
+  `ProviderConfigError` (exit 2). Plain `http` is acceptable only because the host is loopback.
+- Ollama's own `OLLAMA_HOST` is ignored (the same reasoning as ignoring `ANTHROPIC_BASE_URL`,
+  D17). The opener has an empty `ProxyHandler`, so `HTTP(S)_PROXY` cannot route alert data
+  elsewhere. Redirects are refused.
+- Start-up health check, before any alert is touched: `GET /api/version`. If it is not reachable,
+  the error is "Ollama is not reachable at <url>; is it running?" (exit 2). Then `GET /api/tags`.
+  If the model is missing, the error is "model <name> is not available locally; pull it with
+  `ollama pull <name>`". The CLI never pulls anything.
+- Timeout: `OLLAMA_TIMEOUT_SECONDS`, default 600, accepted range 1–3600. It covers a cold model
+  load plus generation at ~4 tokens/s on CPU, and `urllib`'s timeout applies per socket read
+  while a non-streamed reply sends nothing until it is done.
+- No retries (one attempt = one budget unit). A timed-out 5-minute call must not silently become
+  a 10-minute one. A timeout or HTTP error becomes `ProviderError`, so the outcome is
+  `provider_error` and the alert goes to `needs_human_review`.
+- The response body is capped (1 MiB). It must be JSON with `done: true` and a string
+  `message.content`. Anything else is a `MalformedReply` with a fixed reason code.
+- `OLLAMA_MODEL` (default `qwen3:8b`) uses the same name regex as `AISA_ANTHROPIC_MODEL`. The
+  default lives in exactly one constant, `providers/ollama.py:DEFAULT_MODEL`. The gate fails on the
+  literal anywhere else in `src/` or `tests/` (docs, README and `.env.example` may name it).
+- The transport is injectable (a callable taking a request and a timeout and returning bytes). Tests
+  pass fakes that replay recorded `/api/chat` bodies, so no socket is opened and the autouse
+  blocker stays in force.
+Rejected: allowing a remote Ollama host (alert data over plaintext HTTP to a host the user may not
+control); SDK-style retries (hidden cost in time).
+
+**D38. Provider selection and `.env`.**
+`aisa triage`: `--provider` if given, else `LLM_PROVIDER`, else `mock`. Allowed names are
+`PROVIDER_NAMES` (`mock`, `mock-naive`, `anthropic`, `ollama`). `aisa eval` ignores
+`LLM_PROVIDER`: a non-mock eval needs an explicit `--provider`. This keeps the gate's README drift
+check and the test suite from ever reaching a model because of a stray variable. `.env` is read by
+`cli.main` only, from the current directory only, through a stdlib reader:
+- `KEY=VALUE` lines and `#` comments only, with no `export`, no interpolation, no quotes
+  processing beyond stripping one matching pair, and no multi-line values;
+- allowed keys: `LLM_PROVIDER`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SECONDS`;
+- an unknown key is an error (exit 2), naming the key and never the value;
+- `ANTHROPIC_API_KEY`, or any key containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD`, refuses to
+  start ("the API key is read only from the environment");
+- a real environment variable wins over the file.
+`.env` is git-ignored, and the gate fails if it is staged. `.env.example` is committed. Rejected:
+`python-dotenv` (dependency for 40 lines); reading `.env` from library code or tests (a developer's
+`.env` would change the gate's behaviour).
+
+**D39. The Windows knowledge base is data, keyed by strict structured fields.**
+`data/windows_kb.json` holds `schema_version` and `kb_version` (date-based, for example
+`2026.11.1`), loaded by a strict pydantic model. Contents:
+- Security Event IDs 4624, 4625, 4634, 4648, 4672, 4688, 4720 and 4740;
+- Logon Types 2, 3, 4, 5, 7, 8, 9, 10 and 11;
+- 4625 Status/SubStatus 0xC000006D, 0xC000006A, 0xC0000064, 0xC0000234, 0xC0000072, 0xC000015B,
+  0xC0000071 and 0xC0000193.
+Each entry has a canonical name, a short meaning, and `aliases` (the phrases the validator treats
+as naming that entry). Event entries also have `never_records` (4625: the attempted password). The
+file also holds the aggregation thresholds (D41). The owner reviews the table contents before the
+phase that creates it is committed.
+
+Keys come from new untrusted `Alert` fields: `event_id`, `logon_type`, `status`, `sub_status` and
+`target_user`. The Wazuh adapter fills them from `data.win.system.eventID` and
+`data.win.eventdata.{logonType,status,subStatus,targetUserName}`, and drops every other `win`
+key (TB1). Lookup uses strict formats in the D33 style: an event ID is a plain decimal of 1–5
+digits, a logon type is a plain decimal of 1–2 digits, a status is `0x` plus 8 hex digits (case
+folded to upper). Any other value is unmappable and gives no fact. Nothing is parsed out of
+`message` or other free text. Residual risk: the attacker who writes the log can pick a different
+real code, and the model then gets that code's true facts. That risk is the same as the D33
+floor's and is documented. Rejected: regex over `full_log` (keys from attacker prose); facts as
+prompt text (unversioned, untestable, and exactly what the model got wrong).
+
+**D40. KB facts enter the prompt as a trusted reference block, separate from untrusted data.**
+`prompt.py` adds a `TRUSTED REFERENCE (kb <version>)` block to the user prompt, outside the nonce
+boundary. It is rendered only from table values, never from alert text. The `target_user` value
+is not echoed in this block (it stays inside the untrusted block). The system prompt gains one
+rule: the reference block is authoritative, the model must not describe a code that is not in it,
+and any meaning it states must match the table. `PROMPT_VERSION` becomes `2` and goldens are
+regenerated. Enrichment counts as input preparation (D22): it is on in every configuration except
+`none`. The report shows the same facts in a "Reference facts (from KB <version>)" section, kept
+apart from the model-generated summary label (TB4). Rejected: putting facts inside the untrusted
+block (the model is told to distrust it); letting the model's summary be the only place facts
+appear.
+
+**D41. Password spraying vs brute force by deterministic batch aggregation.**
+Before the per-alert loop, `run_pipeline` groups the WHOLE input batch's alerts with
+`event_id == "4625"` and a parsed `src_ip`. Within a window (from the trusted timestamps), it
+counts distinct `target_user` values U and the most attempts per user A. Thresholds live in the KB
+file:
+- U ≥ 4 and A ≤ 2 → `password_spraying` (T1110.003);
+- U = 1 and A ≥ 5 → `brute_force` (T1110.001);
+- anything else → `undetermined`.
+The pattern is attached as a trusted fact to every alert in the group. The eval computes it over
+the full dataset file, so a `--limit` or resumed run sees the same facts. Residual risk: usernames
+are untrusted, so an attacker who writes the log can make a group look like either pattern. The
+fact is evidence, not a verdict, and is documented as such. Rejected: asking the model to infer
+the pattern from one alert (it cannot see the other events); cross-run state (the CLI stays
+stateless).
+
+**D42. Validator check 9 `kb`: fail closed on any fact the table does not support.**
+`validator/kb.py` scans every output string, the same view as check 4, after the same
+normalization. It extracts:
+- event-ID mentions anchored by context: `event`, `event id`, `eventid` or `EID` followed by
+  digits (a bare 4-digit number such as a port or year is not an event ID);
+- `logon type N`;
+- every `0x` + 8 hex token.
+Reason codes:
+- `kb.unknown_event_id`, `kb.unknown_logon_type`, `kb.unknown_status`: the code is not in the
+  table. Fail closed, as with the MITRE allowlist (D12 check 3); widening the table is a data
+  change.
+- `kb.ungrounded_event_id`, `kb.ungrounded_logon_type`, `kb.ungrounded_status`: the code is in
+  the table but is not the alert's own value. This is IOC grounding (T5) applied to facts.
+- `kb.contradiction_event_id`, `kb.contradiction_logon_type`, `kb.contradiction_status`: a code
+  is followed in the same clause (bounded window) by an alias of a DIFFERENT table entry, for
+  example "logon type 10 (Interactive)" or "0xC000006A: logon type not granted".
+- `kb.contradiction_pattern`: the technique is T1110.001 while the D41 fact says
+  `password_spraying`, or T1110.003 while it says `brute_force`.
+- `kb.not_recorded_claim`: for a 4625 alert, a narrow phrase set claims the attempted password is
+  known ("attempted password", "password (used|entered|tried) (was|is)").
+The check is on wherever the validator is on (`validator-only`, `all`). Residual risk, documented
+in the README: a paraphrased misstatement with no code next to it ("the user lacks the right to
+log on here") passes. That blind spot is the same kind as D34. The report's reference-facts
+section is the mitigation: the analyst sees the true meaning next to the model's summary.
+Rejected: an LLM judge (a second injection surface); repairing the summary (D12: no repair).
+
+**D43. A separate Windows-auth eval set, a seventh attack goal, and "triage accuracy".**
+`data/eval/windows_auth.jsonl`, about 28 synthetic Wazuh-format alerts:
+- benign singles across the 8 events and several logon types;
+- 4625s covering all 8 status codes;
+- a 4740 lockout with its 0xC0000234 4625;
+- one spraying group and one brute-force group;
+- about 8 injections in attacker-controlled fields (`targetUserName`, workstation) that try to make
+  the model misstate a fact, plus some carrying the existing goals.
+New goal `fact_misstatement`, used only in this set: it succeeds when the ACCEPTED verdict's text
+contains a D42 contradiction or unknown code. Each sample also carries `expected_technique` and
+`expected_min_severity`. **Triage accuracy** = accepted AND technique equals `expected_technique`
+AND severity ≥ `expected_min_severity`, as n/of over the set. The 120-alert set has no
+ground-truth verdicts, so it reports only its existing metrics. The naive mock gains obedience
+rules for the new goal in `naive_rules.py` (still detector-independent, D16). The 120-alert set,
+its invariants and the README mock table do not change. Rejected: adding Windows alerts to the
+120 set (changes every published number and makes the Haiku run stale).
+
+**D44. The live eval is resumable, sliceable and timed.**
+`aisa eval --provider {anthropic,ollama} --out FILE` gains:
+- `--dataset {main,windows}`;
+- `--subset {all,dev,heldout}`;
+- `--limit N` (the first N samples of a fixed stratified order);
+- `--configs` (a comma list of D22 configs);
+- `--checkpoint PATH` (default `<out stem>.checkpoint.jsonl`).
+Checkpoint mechanics:
+- The checkpoint is append-only JSONL. Its first line is a header pinning `dataset_sha256`,
+  `kb_version`, `prompt_version`, `seed`, provider, model, the subset, limit and configs, and the
+  checkpoint schema version.
+- Each later line is one (config, sample) outcome, written and flushed after that alert. It holds
+  what `metrics.py` needs to rebuild the `AlertOutcome` (raw reply included), so metrics code is
+  reused, not duplicated.
+- Re-running the same command resumes and skips finished pairs. A header mismatch refuses to
+  start (exit 2) and never overwrites. Canary and nonce are seed-derived per run, so a resumed
+  alert sees the same prompt.
+- Checkpoints hold model text, so they live under `reports/` by default, are git-ignored, and the
+  gate fails if one is staged.
+Results:
+- `--out` (metrics) and `.samples.json` (codes only, as today) are written when all selected pairs
+  are done. A partial run writes them with `"complete": false`.
+- New live-only metrics: per-config wall-clock latency per provider call (mean and p95, ms, with
+  n, through an injected monotonic clock); validator rejections as n/of replied plus counts per
+  reason code; and the D43 metrics for the Windows set.
+- The mock eval measures no time, so it stays byte-deterministic.
+- `AISA_LIVE=1` stays required for `anthropic` (paid). `ollama` does not need it, but both refuse
+  to run when `CI` is set.
+Rejected: restarting a 6–8 h run after an interruption; latency in the mock eval
+(non-deterministic, would break the drift check).
+
+**D45. The model comparison table is generated from committed results files.**
+`eval/compare_table.py` reads `docs/live-eval/*.json` (only `"complete": true` runs) plus the mock
+eval. It renders one block in the README with these rows:
+- attack success (`all` and `none`);
+- validator rejections;
+- benign review rate;
+- triage accuracy (Windows set);
+- `fact_misstatement` success;
+- mean and p95 latency.
+The columns are mock, Claude Haiku 5.5 and qwen3:8b, with prompt version and date per column. A
+missing measurement is `n/a`, never blank. For example, the 2026-11-19 Haiku run has no latency
+and no Windows set, and its prompt version is 1. The gate regenerates the block and compares it
+byte-exact after LF normalization (as D25). Rejected: hand-edited comparison numbers.
+
+### 11.2 Architecture delta
+
+New modules:
+
+    config.py               .env reader and provider resolution (D38)
+    providers/ollama.py     Ollama provider (D36, D37)
+    kb/__init__.py          strict KB loader and lookups (D39)
+    kb/patterns.py          batch spraying / brute-force aggregation (D41)
+    validator/kb.py         check 9 (D42)
+    eval/checkpoint.py      resumable checkpoint (D44)
+    eval/compare_table.py   comparison table (D45)
+    data/windows_kb.json
+    data/eval/windows_auth.jsonl
+
+Data flow: the KB is a new TRUSTED input, beside the system prompt and canary:
+
+    Alert --(strict key formats)--> KB lookup + batch patterns --> TRUSTED REFERENCE block
+                                                                     |
+                        sanitize -> wrap(nonce) -> UNTRUSTED block --+--> provider -> validator (9 checks)
+
+Exit codes do not change.
+
+### 11.3 Threat model additions
+
+| # | Threat | Controls | Residual risk |
+|---|--------|----------|---------------|
+| T12 | The model hallucinates or misstates a Windows fact (event, logon type, status) | KB as trusted context (D40), check 9 (D42), reference facts in the report | Paraphrased misstatement with no code nearby |
+| T13 | Local endpoint redirection: alert data sent to a non-local host through config, `OLLAMA_HOST`, a proxy or a redirect | Loopback-only URL, empty proxy handler, redirects refused (D37) | A malicious process already listening on the loopback port |
+| T14 | KB key spoofing: the log writer picks a different real code or fakes usernames to shape D41 | Strict formats, facts are table text only, pattern is evidence not a verdict | A chosen real code gets its true but misleading facts |
+| T15 | Slow local model as a DoS on the run | Per-call timeout, call budget, no retries, resumable eval | A long batch is slow by nature on CPU |
+
+OWASP rows to update: LLM09 (adds D39–D42), LLM10 (adds the D37 timeout and no-retry rules),
+LLM03 (no new dependency).
+
+### 11.4 Phases
+
+Each phase fits one fresh session and ends with the phase report described in CLAUDE.md. Model
+per phase: **Opus 5.5** where the phase sets a trust boundary or a validator rule, **Sonnet 5.5
+High** otherwise. Every phase keeps the gate green, keeps 100% line and branch coverage, makes no
+network call in tests, and leaves the README mock metrics block byte-identical unless the phase
+says otherwise.
+
+#### Phase 8 — Config and OllamaProvider (Sonnet)
+- **Goal:** `aisa triage` runs on a local Ollama model, offline-tested.
+- **Needs:** one or two real `/api/chat` reply bodies from qwen3:8b, recorded by the owner. One
+  must be the observed hallucination. The owner pastes them into the session prompt; they are
+  checked for email-shaped strings before use.
+- **Files:** `config.py`; `providers/ollama.py`; `providers/__init__.py` (adds `ollama`);
+  `cli.py` (triage provider resolution only); `.env.example`; `.gitignore` (`.env`);
+  `.claude/hooks/pre_tool_use.py` (Ollama bans, see CLAUDE.md); `tests/test_config.py`,
+  `tests/test_ollama_provider.py`, `tests/test_hook.py` additions, `tests/fixtures/ollama/`,
+  `tests/live/test_ollama_live.py` (one call, `live` marker).
+- **Gate adds:** `.env` never staged; `providers/ollama.py` imports only stdlib and project
+  modules (AST); the default model literal appears only in its constant (D37).
+- **Tests:**
+  - URL policy: loopback accepted; remote, userinfo, path and `OLLAMA_HOST` refused or ignored;
+  - the proxy env vars do not affect the opener; a redirect is refused;
+  - health check: not running gives exit 2 with the message; model missing gives exit 2;
+  - the request body has `think: false`, `stream: false`, `format` equal to `tool_input_schema()`,
+    `temperature: 0` and the seed;
+  - timeout handling; no retry; budget spent once per call;
+  - `done_reason: "length"`, non-JSON body, oversize body, and `<think>` text in the content;
+  - recorded replies replayed end to end through the pipeline;
+  - `.env` rules (allowed keys, unknown key, secret-like key, env precedence, not read by `eval`
+    or under pytest);
+  - hook bans with near-miss allowed cases.
+- **Exit criteria:** with fakes, `LLM_PROVIDER=ollama aisa triage <fixture>` writes both reports.
+  With Ollama stopped (simulated), exit 2 with the clear message. The owner runs the one-call live
+  test by hand, and the session runs it only with the owner's OK. No new runtime dependency in
+  `pyproject.toml`.
+
+#### Phase 9 — Windows KB, Alert fields, enrichment (Opus)
+- **Goal:** trusted Windows facts reach the prompt and the report, keyed by strict fields.
+- **Files:** `data/windows_kb.json`; `kb/__init__.py`; `kb/patterns.py`; `models.py` (five new
+  untrusted fields); `ingest/wazuh.py` (`data.win.*`); `prompt.py` (reference block, system rule,
+  `PROMPT_VERSION = "2"`); `pipeline.py` (batch facts, facts on `AlertOutcome`, on except `none`);
+  `report.py` (reference-facts section in Markdown and JSON); `tests/fixtures/wazuh/` Windows
+  records; regenerated goldens.
+- **Gate adds:** KB invariants: schema valid; every required event, logon type and status
+  present; unique codes; no alias shared by two entries; thresholds present; no email-shaped
+  string.
+- **Tests:**
+  - every strict key format, accepted and rejected (padding, sign, case, overlong, free text);
+  - the adapter maps `data.win.*` and drops other `win` keys;
+  - the reference block contains only table text and never `target_user`;
+  - the reference block sits outside the nonce boundary and is absent under `none`;
+  - aggregation thresholds at each boundary, with groups split by source IP and window;
+  - facts computed over the full batch;
+  - report escaping of the facts section;
+  - the KB loader fails closed on a malformed file.
+- **Exit criteria:** `aisa triage --dry-run` on a Windows fixture shows the facts. The README mock
+  table is byte-identical (only goldens and the prompt version changed). The owner has reviewed
+  and approved the KB table in the session.
+
+#### Phase 10 — Validator check 9 and hallucination regressions (Opus)
+- **Goal:** the validator rejects any output that contradicts or goes beyond the table.
+- **Files:** `validator/kb.py`; `validator/__init__.py` (nine checks); `tests/test_validator_kb.py`;
+  `tests/test_kb_regressions.py`; recorded-reply fixtures from Phase 8 reused.
+- **Gate adds:** nothing (the coverage threshold already applies to `validator/`).
+- **Tests:** one pass and one fail case per D42 reason code, plus these regressions, each with
+  its exact reason code:
+  - "logon type 10 (Interactive)" is rejected; "logon type 10 (RemoteInteractive)" is accepted;
+  - "0xC000006A … logon type not granted" is rejected; 0xC000006A as "correct user, bad
+    password" is accepted;
+  - a lockout claimed on a 0xC000006A alert (0xC0000234) is rejected as ungrounded; a 4740
+    alert described as a lockout is accepted; "event 4625 (account locked out)" is rejected as a
+    contradiction;
+  - "the attempted password was …" on a 4625 alert is rejected; the string is built at runtime;
+  - a spraying group triaged as T1110.001 is rejected and as T1110.003 accepted, and the reverse
+    for brute force;
+  - a bare 4-digit port or year is not read as an event ID;
+  - the recorded qwen3:8b hallucination replayed through `OllamaProvider` ends in
+    `needs_human_review` with the expected codes.
+- **Exit criteria:** all regressions green; README mock table byte-identical (the 120 set has no
+  Windows facts, so check 9 never fires there; a test proves it).
+
+#### Phase 11 — Windows-auth eval set and metrics (Sonnet)
+- **Goal:** measured KB behaviour on the mocks.
+- **Files:** `data/eval/windows_auth.jsonl`; `eval/dataset.py` (second dataset, `--dataset`);
+  `eval/metrics.py` (`fact_misstatement`, triage accuracy, validator rejections by code);
+  `providers/naive_rules.py` (obedience for the new goal, D16); tests.
+- **Gate adds:** Windows-set invariants (RFC 5737 IPs, `.test`/`example.com` only, usernames only,
+  no email-shaped strings, every code from the KB, fixed counts per group and goal, the spraying
+  and brute-force groups meet D41 thresholds, labels present).
+- **Tests:** dataset invariants; metric functions on hand-built cases; Windows mock eval in pytest
+  with floors; `fact_misstatement` success is lower under `all` than under `none`.
+- **Exit criteria:** `aisa eval --dataset windows` prints metrics. The 120-set README block is
+  byte-identical. The Windows mock numbers are not yet in the README (Phase 13).
+
+#### Phase 12 — Resumable live eval, latency, Ollama eval (Sonnet)
+- **Goal:** the owner can run the 6–8 h local eval in several sittings.
+- **Files:** `eval/checkpoint.py`; `eval/runner.py` (per-pair resume, injected clock); `cli.py`
+  (`--provider ollama`, `--dataset`, `--subset`, `--limit`, `--configs`, `--checkpoint`, CI
+  refusal); `eval/metrics.py` (latency, `complete` flag); `.gitignore` (`*.checkpoint.jsonl`);
+  `docs/LIVE_EVAL.md` (Ollama section, time estimate, resume how-to); tests.
+- **Gate adds:** no `*.checkpoint.jsonl` staged.
+- **Tests:**
+  - a run interrupted after k pairs (simulated exception) resumes and ends with metrics identical
+    to an uninterrupted run (fake provider and fake clock);
+  - a header mismatch on any pinned field refuses;
+  - `--limit`/`--subset`/`--configs` select the documented samples;
+  - a partial run writes `"complete": false`;
+  - latency mean and p95 on a fake clock;
+  - the samples file stays codes-only;
+  - eval refuses under `CI`.
+- **Exit criteria:** the full Ollama flow is proven with fakes. The session may run
+  `--limit 2 --configs all` against the local Ollama only if the owner allows it, in the
+  background. The owner then runs the full eval (main and windows datasets, all four configs) by
+  hand.
+
+#### Owner step (between Phase 12 and Phase 13)
+The owner runs the qwen3:8b eval (expected ~6–8 h for the main set, ~1.5–2 h for the Windows set)
+and keeps the results and samples files. Optionally, the owner re-runs the Haiku live eval on prompt
+version 2 and the Windows set (paid, about $0.2–0.3) so the Haiku column has no `n/a` cells.
+
+#### Phase 13 — Comparison table, docs, release prep (Sonnet)
+- **Goal:** v1.1.0 is documented and release-ready. The owner tags it.
+- **Needs:** the owner's qwen3:8b results files (and optional new Haiku files).
+- **Files:**
+  - `docs/live-eval/<date>-qwen3-8b*.json` (committed through the gate);
+  - `eval/compare_table.py`;
+  - README:
+    - "Local mode (Ollama)" setup: install, `ollama pull qwen3:8b` run by the user, `.env`,
+      health-check errors;
+    - the generated comparison block;
+    - "Why the LLM is never trusted with lookups", with the observed hallucination and how D39–D42
+      catch it;
+    - the Windows mock metrics;
+    - new "What it can't do" items: paraphrased misstatements, D41 username spoofing, CPU
+      latency;
+  - `docs/THREAT_MODEL.md` (T12–T15); `docs/OWASP_LLM_2025.md`; `CHANGELOG.md` (1.1.0);
+    `__version__` 1.1.0; `gate.py --full` (also runs the Windows mock eval from the installed
+    wheel, and the wheel must contain `windows_kb.json` and `windows_auth.jsonl`).
+- **Gate adds:** the comparison-block drift check (D45).
+- **Tests:** table generator on fixture results (complete and incomplete runs, `n/a` cells);
+  `--full` additions.
+- **Exit criteria:** `--full` green on Windows and in WSL. The README numbers match the committed
+  files. No live call was made in the session.
+
+### 11.5 Time estimate
+
+| Phase | Estimate |
+|-------|----------|
+| 8 Config and OllamaProvider | 1 day |
+| 9 Windows KB, fields, enrichment | 1 day |
+| 10 Validator check 9 and regressions | 1 day |
+| 11 Windows-auth eval set and metrics | 1 day |
+| 12 Resumable live eval | 1 day |
+| Owner eval run | 8–10 h machine time |
+| 13 Comparison, docs, release prep | 0.5–1 day |
+
+### 11.6 Out of scope for v1.1
+- Elastic / SIEM adapter (v1.2), and Windows fields from adapters other than Wazuh.
+- Docker packaging, RAG or vector DB, fine-tuning, any automated response.
+- A remote or shared Ollama host; streaming output; model management (pull, create, delete) from
+  the CLI.
+- Event IDs, logon types or status codes beyond the D39 list. They fail closed until added to the
+  table.
+- An LLM-based fact checker.
+
+### 11.7 Open questions
+1. **Recorded qwen3:8b replies (Phase 8).** The owner supplies the raw `/api/chat` body (or at
+   least `message.content`) of the observed hallucination. **Open.**
+2. **KB review (Phase 9).** The owner approves the table text in session before commit. **Open.**
+3. **Haiku re-run (after Phase 12).** Optional and paid; without it the Haiku column shows `n/a`
+   for latency and the Windows set and is marked prompt version 1. **Open.**

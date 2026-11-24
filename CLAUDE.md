@@ -16,6 +16,12 @@ These rules override any tool default or habit.
   tracking: a WSL check venv (`.venv-wsl/`) and a release-check venv (`.venv-release/`).
   Do not create any other environment.
 - Network access is allowed only to PyPI. Nothing is fetched from GitHub or anywhere else.
+- Loopback calls to the owner's local Ollama (`localhost:11434`) are allowed only when the
+  session prompt says so, and only through `aisa` or the `live`-marked test. Never run
+  `ollama pull`, `push`, `rm`, `cp`, `create`, `serve` or `stop`, and never change Ollama's
+  configuration or service. `ollama list`, `ps`, `show` and `--version` are fine.
+- Never start a full live eval (Anthropic or Ollama). The owner runs it. With the owner's OK a
+  session may run at most `--limit 2` against Ollama, in the background.
 - Do not modify the WSL distribution (no package installs, no config changes, no
   upgrades inside it). Using it to run the gate in the WSL check venv is fine.
 
@@ -57,10 +63,18 @@ These rules override any tool default or habit.
   Never write "skip if file missing" logic.
 - The assistant only recommends. `src/` never uses `subprocess`, `os.system`, `eval`
   or `exec`. The gate enforces this with an AST check.
-- Real API calls never run in tests or CI. Live tests are behind a pytest marker that
-  is skipped by default, and a test fixture blocks sockets.
+- Real model calls (Anthropic or Ollama) never run in tests or CI. Live tests are behind
+  a pytest marker that is skipped by default, and a test fixture blocks sockets. Ollama
+  tests use an injected fake transport with recorded reply bodies.
 - The API key is read only from the `ANTHROPIC_API_KEY` environment variable. It is
-  never written to a file, a log, a fixture or a report.
+  never written to a file, a log, a fixture, a report or `.env`.
+- `.env` and `*.checkpoint.jsonl` are git-ignored and never staged; the gate enforces it.
+  `.env` holds only `LLM_PROVIDER` and `OLLAMA_*` keys.
+- Model names (`claude-haiku-5-5`, `qwen3:8b`) live only in each provider's
+  `DEFAULT_MODEL` constant and in docs. Tests import the constant.
+- Windows event facts come only from `data/windows_kb.json`. Never write an event,
+  logon-type or status meaning into a prompt, a test expectation or code as a literal;
+  read it from the table.
 
 ## Phase reports
 
@@ -103,7 +117,7 @@ This project uses Graphify to save session limits.
 
 ## Working pattern per session
 
-1. Read this file and the current phase in `PLAN.md`.
+1. Read this file and the current phase in `PLAN.md` (v1.1 phases are in section 11).
 2. From Phase 2 on, query the graph before opening files.
 3. Do the phase. Keep to its file list; raise anything that needs a plan change.
 4. Run the gate, commit through the gate, append the phase report.
