@@ -889,8 +889,14 @@ reference block passes: a span that reproduces the name or meaning of one of the
 entries is not scanned when it sits next to that entry's own code (or no code); the table gains
 the alias "not been granted the requested logon right" (0xC000015B) and its meanings name no
 other code and no other entry's alias, which `kb/selfcheck.py` (gate) enforces (`kb_version`
-2026.11.2). Blind spots recorded with the paraphrase one: a lockout described with no code near it,
-"different passwords are tried in sequence", and an entry's meaning placed BEFORE a wrong code.
+2026.11.2). Phase 10b: a code joined to the text before it by an opening parenthesis or a dash
+(optionally with a status label: "(status 0x...", "- error code 0x...") also binds to the clause
+before it ("the password is wrong (0xC0000064)", "RDP logon (logon type 3)"), back to the
+previous code mention, a sentence end or line break, a comma, a colon, a closing parenthesis or
+200 characters, with the same longest-alias-wins rule and echo exemption; `kb/selfcheck.py` also
+checks every entry written as "<meaning> (<code>)". Blind spots recorded with the paraphrase one:
+a lockout described with no code near it, "different passwords are tried in sequence", and a
+wrong meaning joined to a code only by a colon or a bare space ("wrong password: 0xC0000064").
 Rejected: an LLM judge (a second injection surface); repairing the summary (D12: no repair).
 
 **D43. A separate Windows-auth eval set, a seventh attack goal, and "triage accuracy".**

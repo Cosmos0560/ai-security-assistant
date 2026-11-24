@@ -28,8 +28,12 @@ Rules, as ``kb.<rule>`` reason codes:
   the first of: the next code mention, the end of the sentence (``.``, ``!``, ``?``, ``;`` before
   a space, or a line break), or ``MAX_CLAUSE_CHARS``. It continues into the next sentence only
   when that sentence opens with a back-reference ("this code", "the error code", "that status",
-  "it" ...). Aliases are matched longest first, so "remote interactive" is never read as
-  "interactive" and "network cleartext" never as "network".
+  "it" ...). A code joined to the text before it by an opening parenthesis or a dash ("the
+  password is wrong (0xc0000064)", "rdp logon (logon type 3)", "bad password - status
+  0xc000006a") also owns the clause before it, back to the first of: the previous code
+  mention, a sentence end or line break, a comma, a colon, a closing parenthesis, or
+  ``MAX_CLAUSE_CHARS`` (Phase 10b). Aliases are matched longest first, so "remote interactive"
+  is never read as "interactive" and "network cleartext" never as "network".
 * ``contradiction_pattern``: the technique is the brute-force technique while the D41 batch fact
   says password spraying, or the reverse (techniques read from the table).
 * ``unsupported_pattern``: the D41 fact is ``undetermined`` (the table tells the model not to
@@ -43,10 +47,12 @@ Rules, as ``kb.<rule>`` reason codes:
 
 Residual risk (README "What it can't do"), by design: a misstatement with no code in its clause
 passes ("the user lacks the right to log on here"), as does a line such as "different
-passwords are tried in sequence". The report's reference-facts section is the mitigation: the
-analyst sees the table's meaning next to the model's summary. The other way round, a correct
-sentence that names a second entry in the code's clause ("event 4740 after five failed logon
-attempts", "logon type 10, not interactive") goes to review: fail closed over fluent.
+passwords are tried in sequence", and so does a meaning joined to a wrong code by a colon or a
+bare space only ("wrong password: 0xc0000064"). The report's reference-facts section is the
+mitigation: the analyst sees the table's meaning next to the model's summary. The other way
+round, a correct sentence that names a second entry in the code's clause ("event 4740 after
+five failed logon attempts", "logon type 10, not interactive") goes to review: fail closed over
+fluent.
 """
 
 from __future__ import annotations
@@ -103,12 +109,24 @@ _BACK_REFERENCE_RE: Final = re.compile(
 )
 
 
+_BACK_BOUNDARY_RE: Final = re.compile(r"\n|[.!?;](?=\s|$)|[,:)]")
+# What joins a code to the clause before it: an opening parenthesis or a dash, then at most a
+# status label ("(status 0x...", "- sub status: 0x..."). A colon alone ("wrong password:
+# 0x...") or a bare space does not join (label form, and a list such as "logon type 3 network
+# logon and logon type 10" would otherwise read the first entry's words as the second's).
+_JOINT_RE: Final = re.compile(
+    r"(?:\(|(?<!\S)-{1,2}|[–—])\s*"
+    r"(?:(?:sub\s*)?status(?:\s+code)?|(?:error\s+)?code)?[\s:=#]*\Z"
+)
+
+
 @dataclass(frozen=True)
 class Mention:
     kind: Kind
     code: str  # as written, case-folded; canonical form is decided against the table
     start: int
     end: int
+    anchor: int  # where the whole mention starts ("event", "logon type", the list number, "0x")
 
 
 def kb_text(text: str) -> str:
@@ -179,17 +197,25 @@ def mentions(text: str, matchers: _Matchers) -> list[Mention]:
     """Every code mention in ``text`` (already ``kb_text``), in order of position."""
     found: dict[int, Mention] = {}
     for match in _EVENT_RE.finditer(text):
-        found[match.start(1)] = Mention("event_id", match.group(1), match.start(1), match.end(1))
+        found[match.start(1)] = Mention(
+            "event_id", match.group(1), match.start(1), match.end(1), match.start()
+        )
     for match in _LOGON_RE.finditer(text):
-        found[match.start(1)] = Mention("logon_type", match.group(1), match.start(1), match.end(1))
+        found[match.start(1)] = Mention(
+            "logon_type", match.group(1), match.start(1), match.end(1), match.start()
+        )
     for anchor in _LOGON_ANCHOR_RE.finditer(text):
         line_end = text.find("\n", anchor.end())
         stop = len(text) if line_end == -1 else line_end
         for match in matchers.list_item.finditer(text, anchor.end(), stop):
             start = match.start(1)
-            found.setdefault(start, Mention("logon_type", match.group(1), start, match.end(1)))
+            found.setdefault(
+                start, Mention("logon_type", match.group(1), start, match.end(1), start)
+            )
     for match in _STATUS_RE.finditer(text):
-        found[match.start(1)] = Mention("status", match.group(1), match.start(1), match.end(1))
+        found[match.start(1)] = Mention(
+            "status", match.group(1), match.start(1), match.end(1), match.start(1)
+        )
     return [found[start] for start in sorted(found)]
 
 
@@ -213,6 +239,21 @@ def clause(text: str, mention: Mention, next_start: int) -> str:
         return first
     second, _ = _sentence(text, following, next_start)
     return f"{first} {second}"
+
+
+def back_clause(text: str, mention: Mention, previous_end: int) -> str:
+    """The clause right before ``mention`` when the code is joined to it ("bad password
+    (0xc000006a)", "rdp - logon type 10"), else "". It runs back from the joint to the first of:
+    the previous code mention, a sentence end or line break, a comma, a colon, a closing
+    parenthesis, or ``MAX_CLAUSE_CHARS``."""
+    lo = max(previous_end, mention.anchor - MAX_CLAUSE_CHARS)
+    head = text[lo : mention.anchor]
+    joint = _JOINT_RE.search(head)
+    if joint is None:
+        return ""
+    head = head[: joint.start()]
+    boundaries = [match.end() for match in _BACK_BOUNDARY_RE.finditer(head)]
+    return head[boundaries[-1] :] if boundaries else head
 
 
 def _canonical(kind: Kind, code: str) -> str | None:
@@ -365,7 +406,11 @@ def _code_rules(texts: Iterable[str], alert: Alert, kb: KnowledgeBase, echo: boo
             if code not in own[mention.kind]:
                 rules.add(f"ungrounded_{mention.kind}")
             next_start = found[index + 1].start if index + 1 < len(found) else len(text)
-            named = matchers.tables[mention.kind].codes_in(clause(text, mention, next_start))
+            previous_end = found[index - 1].end if index else 0
+            table = matchers.tables[mention.kind]
+            named = table.codes_in(clause(text, mention, next_start)) | table.codes_in(
+                back_clause(text, mention, previous_end)
+            )
             if named - {code}:
                 rules.add(f"contradiction_{mention.kind}")
     return rules

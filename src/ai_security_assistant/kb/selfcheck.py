@@ -1,8 +1,9 @@
 """KB self-consistency (D42 invariant): the table's own reference text must pass check 9.
 
-For every entry (each status both as Status and as SubStatus), the line the trusted reference
-block renders for it is used as the model's summary, on an alert whose facts hold exactly that
-entry. Two readings must both pass:
+For every entry (each status both as Status and as SubStatus), two forms are used as the model's
+summary, on an alert whose facts hold exactly that entry: the line the trusted reference block
+renders for it, and the meaning written first with the code after it, "<meaning> (<code>)"
+(check 9 binds that form backwards, Phase 10b). Each form, in two readings, must pass:
 
 * with the grounded-echo exemption (what a faithful model that quotes the block gets);
 * without it (the table text names no other code and no other entry's alias, so a partial
@@ -30,6 +31,13 @@ _FIELD: Final[dict[FactKind, str]] = {
     "status": "status",
     "sub_status": "sub_status",
 }
+# How a summary names each kind of code, so check 9 reads it as a mention.
+_MENTION: Final[dict[FactKind, str]] = {
+    "event": "event {}",
+    "logon_type": "logon type {}",
+    "status": "{}",
+    "sub_status": "{}",
+}
 # An alert with no Windows key at all; each probe sets exactly one.
 _PROBE: Final = Alert(
     source="wazuh",
@@ -56,15 +64,26 @@ def reference_line(fact: Fact, kb_version: str) -> str:
     return block.splitlines()[1].removeprefix("- ")
 
 
+def meaning_first_line(fact: Fact) -> str:
+    """The entry's meaning with its code after it in parentheses ("<meaning> (<code>)"), the
+    form check 9 binds backwards (Phase 10b). The meaning's final sentence end is dropped so the
+    code closes the same sentence."""
+    return f"{fact.meaning.rstrip().rstrip('.!?;')} ({_MENTION[fact.kind].format(fact.code)})."
+
+
 def problems(kb: KnowledgeBase) -> list[str]:
     found: list[str] = []
     for fact in _facts(kb):
         alert = _PROBE.model_copy(update={_FIELD[fact.kind]: fact.code})
-        line = reference_line(fact, kb.kb_version)
-        for echo, reading in ((True, "quoted"), (False, "as a plain claim")):
-            rules = scan([line], alert, kb=kb, echo=echo)
-            if rules:
-                found.append(f"{fact.kind} {fact.code}: its reference text {reading} fails {rules}")
+        forms = (
+            ("reference text", reference_line(fact, kb.kb_version)),
+            ("meaning-first text", meaning_first_line(fact)),
+        )
+        for form, line in forms:
+            for echo, reading in ((True, "quoted"), (False, "as a plain claim")):
+                rules = scan([line], alert, kb=kb, echo=echo)
+                if rules:
+                    found.append(f"{fact.kind} {fact.code}: its {form} {reading} fails {rules}")
     return found
 
 

@@ -442,12 +442,116 @@ def test_an_echo_next_to_a_code_of_another_kind_is_scanned_normally() -> None:
     ) == ["ungrounded_logon_type"]
 
 
-def test_known_limit_an_echo_before_a_wrong_code_passes() -> None:
-    """Clauses look forward from a code (D42), so the meaning BEFORE a wrong code is not read
-    as a claim about it. Recorded next to the D42 blind spot in the phase report."""
+def test_an_echo_before_a_wrong_code_in_parentheses_is_a_contradiction() -> None:
+    """Phase 10b: the meaning BEFORE a code in parentheses is a claim about that code (this
+    was a Phase 10 known limit). Before its own code it is a grounded echo."""
     both = alert(status="0xc0000064", sub_status="0xc000006a")
     meaning = STATUS["0xC000006A"].meaning.rstrip(".")
-    assert scan([f"{meaning} (0xC0000064)."], both) == []
+    assert scan([f"{meaning} (0xC0000064)."], both) == ["contradiction_status"]
+    assert scan([f"{meaning} (0xC000006A)."], both) == []
+    assert scan([f"{meaning} (0xC000006A)."], both, echo=False) == []
+
+
+# ---------------------------------------------------------------- Phase 10b: meaning before code
+
+S64, S6A, S234 = STATUS["0xC0000064"], STATUS["0xC000006A"], STATUS["0xC0000234"]
+
+MEANING_FIRST_FAILS = [
+    # "the user name does not exist (0xC000006A)"
+    (f"the {S64.aliases[2]} (0xC000006A)", {"status": "0xc000006a"}, "contradiction_status"),
+    # "password is wrong (0xC0000064)"
+    (f"{S6A.aliases[3]} (0xC0000064)", {"status": "0xc0000064"}, "contradiction_status"),
+    # "interactive logon (logon type 10)"
+    (
+        f"{LOGON['2'].aliases[0]} logon (logon type 10)",
+        {"logon_type": "10"},
+        "contradiction_logon_type",
+    ),
+    # "account was locked out (0xC000006A)"
+    (
+        f"account was {S234.aliases[3]} (0xC000006A)",
+        {"status": "0xc000006a"},
+        "contradiction_status",
+    ),
+    # "failed logon (event 4624)"
+    (f"{EVENTS['4625'].aliases[0]} (event 4624)", {"event_id": "4624"}, "contradiction_event_id"),
+]
+
+MEANING_FIRST_PASSES = [
+    (f"{S6A.aliases[0]} (0xC000006A)", {"status": "0xc000006a"}),  # "bad password (...)"
+    (f"{S64.aliases[0]} (0xC0000064)", {"status": "0xc0000064"}),  # "no such user (...)"
+    (f"{LOGON['10'].aliases[3]} session (logon type 10)", {"logon_type": "10"}),  # "RDP session"
+    (f"{S234.aliases[1]} (0xC0000234)", {"status": "0xc0000234"}),  # "account locked out (...)"
+    (f"{EVENTS['4625'].aliases[0]} (event 4625)", {"event_id": "4625"}),
+]
+
+
+@pytest.mark.parametrize(("text", "fields", "rule"), MEANING_FIRST_FAILS)
+def test_a_wrong_meaning_before_a_code_is_a_contradiction(
+    text: str, fields: dict[str, str], rule: str
+) -> None:
+    assert scan([text], alert(**fields)) == [rule]
+    assert scan([text.upper()], alert(**fields)) == [rule]
+
+
+@pytest.mark.parametrize(("text", "fields"), MEANING_FIRST_PASSES)
+def test_the_right_meaning_before_a_code_passes(text: str, fields: dict[str, str]) -> None:
+    assert scan([text], alert(**fields)) == []
+
+
+@pytest.mark.parametrize(
+    "joint",
+    [" - ", " -- ", " – ", "—", " (status ", " (SubStatus: ", " - error code ", " (code "],
+)
+def test_a_dash_or_a_labelled_parenthesis_also_joins(joint: str) -> None:
+    assert scan([f"{S6A.aliases[1]}{joint}0xC0000064"], alert(status="0xc0000064")) == [
+        "contradiction_status"
+    ]
+
+
+@pytest.mark.parametrize("joint", [": ", " ", " = ", ", status "])
+def test_a_colon_or_a_bare_space_does_not_join(joint: str) -> None:
+    """Label form ("wrong password: 0x...") and plain lists are not read backwards: residual
+    blind spot, recorded in the phase report."""
+    assert scan([f"{S6A.aliases[1]}{joint}0xC0000064"], alert(status="0xc0000064")) == []
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        "{wrong}. Then ",  # a sentence end
+        "{wrong}\nthen ",  # a line break
+        "{wrong}, then ",  # a comma
+        "{wrong}: then ",  # a colon
+        "({wrong}) then ",  # a closing parenthesis
+        "{wrong} event 4625 then ",  # a previous code mention
+    ],
+)
+def test_the_clause_before_stops_at_its_boundary(before: str) -> None:
+    subject = alert(event_id="4625", status="0xc0000064")
+    text = before.format(wrong=S6A.aliases[1]) + S64.aliases[0] + " (0xC0000064)"
+    assert scan([text], subject) == []
+
+
+def test_the_clause_before_is_capped() -> None:
+    subject = alert(status="0xc0000064")
+    far = f"{S6A.aliases[1]} " + "x" * check9.MAX_CLAUSE_CHARS + " (0xC0000064)"
+    assert scan([far], subject) == []
+    near = f"{S6A.aliases[1]} " + "x" * (check9.MAX_CLAUSE_CHARS - 40) + " (0xC0000064)"
+    assert scan([near], subject) == ["contradiction_status"]
+
+
+def test_back_clause_reads_only_the_joined_clause() -> None:
+    matchers = check9._matchers(KB)
+    words = S6A.aliases[0]
+    text = check9.kb_text(f"a, {words} (logon type 10)")
+    (mention,) = check9.mentions(text, matchers)
+    assert text[mention.anchor : mention.start] == "logon type "
+    assert check9.back_clause(text, mention, 0) == f" {words} "
+    assert check9.back_clause(text, mention, mention.anchor) == ""
+    bare = check9.kb_text(f"{words} logon type 10")
+    (plain,) = check9.mentions(bare, matchers)
+    assert check9.back_clause(bare, plain, 0) == ""
 
 
 def test_without_the_exemption_the_echo_is_scanned_as_a_plain_claim() -> None:

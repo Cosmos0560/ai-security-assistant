@@ -39,8 +39,9 @@ def test_a_meaning_that_names_another_code_fails_as_a_plain_claim() -> None:
 
     found = selfcheck.problems(kb_with(cross_code))
     assert found == [
-        "status 0xC000006D: its reference text as a plain claim fails ['ungrounded_status']",
-        "sub_status 0xC000006D: its reference text as a plain claim fails ['ungrounded_status']",
+        f"{kind} 0xC000006D: its {form} as a plain claim fails ['ungrounded_status']"
+        for kind in ("status", "sub_status")
+        for form in ("reference text", "meaning-first text")
     ]
 
 
@@ -50,8 +51,33 @@ def test_a_meaning_with_another_entrys_alias_fails_as_a_plain_claim() -> None:
         document["logon_types"]["8"]["meaning"] = f"A user logged on over the {network}."
 
     assert selfcheck.problems(kb_with(other_alias)) == [
-        "logon_type 8: its reference text as a plain claim fails ['contradiction_logon_type']"
+        f"logon_type 8: its {form} as a plain claim fails ['contradiction_logon_type']"
+        for form in ("reference text", "meaning-first text")
     ]
+
+
+def test_another_entrys_alias_in_a_later_sentence_fails_only_meaning_first() -> None:
+    """The reference line reads forward from the code (first sentence only); the meaning-first
+    form binds the meaning's last sentence to the code, so the gate now sees it (Phase 10b)."""
+
+    def later_alias(document: dict[str, Any]) -> None:
+        wrong = document["statuses"]["0xC000006A"]["aliases"][1]
+        document["statuses"]["0xC0000072"]["meaning"] += f" Not a {wrong}."
+
+    assert selfcheck.problems(kb_with(later_alias)) == [
+        f"{kind} 0xC0000072: its meaning-first text as a plain claim fails ['contradiction_status']"
+        for kind in ("status", "sub_status")
+    ]
+
+
+def test_the_meaning_first_line_names_each_kind_of_code() -> None:
+    kb = load_kb()
+    lines = {fact.kind: selfcheck.meaning_first_line(fact) for fact in selfcheck._facts(kb)}
+    assert lines["event"].endswith(f" (event {list(kb.events)[-1]}).")
+    assert lines["logon_type"].endswith(f" (logon type {list(kb.logon_types)[-1]}).")
+    assert lines["status"].endswith(f" ({list(kb.statuses)[-1]}).")
+    assert lines["sub_status"] == lines["status"]
+    assert ". (" not in "".join(lines.values())
 
 
 def test_main_reports_and_sets_the_exit_code(
