@@ -147,14 +147,28 @@ def test_settings_reach_the_provider(
 
 
 @pytest.mark.parametrize(
-    ("fixture", "code"),
+    ("fixture", "codes"),
     [
-        ("chat_hallucination_4625.json", "schema.not_json"),  # the observed qwen3 prose
-        ("chat_think.json", "schema.not_json"),  # a <think> block before the JSON
+        # The observed qwen3 prose. Check 9 (Phase 10) also reads it: this alert has no Windows
+        # codes, so every code in the prose is ungrounded, and two are paired with a wrong meaning.
+        (
+            "chat_hallucination_4625.json",
+            [
+                "schema.not_json",
+                "kb.ungrounded_logon_type",
+                "kb.ungrounded_status",
+                "kb.contradiction_logon_type",
+                "kb.contradiction_status",
+            ],
+        ),
+        ("chat_think.json", ["schema.not_json"]),  # a <think> block before the JSON
     ],
 )
 def test_a_reply_that_is_not_the_json_object_goes_to_human_review(
-    fixture: str, code: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    fixture: str,
+    codes: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     install(monkeypatch, Router(fixture))
     record = WAZUH.read_text(encoding="utf-8").splitlines()[0]
@@ -162,7 +176,7 @@ def test_a_reply_that_is_not_the_json_object_goes_to_human_review(
     status, out, _err = run(["triage", "--provider", "ollama", "one.json"], capsys)
     assert status == 3
     entry = report()["alerts"][0]
-    assert (entry["status"], entry["reason_codes"]) == ("needs_human_review", [code])
+    assert (entry["status"], entry["reason_codes"]) == ("needs_human_review", codes)
     assert entry["provider_called"] is True
     text = out + Path("reports/report.md").read_text(encoding="utf-8") + json.dumps(report())
     assert "think" not in text.lower().replace("thinking", "")
@@ -172,7 +186,8 @@ def test_a_reply_that_is_not_the_json_object_goes_to_human_review(
 def test_the_real_recorded_reply_goes_to_human_review_and_is_never_shown(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Valid JSON, wrong shape, and two false Windows claims: the schema check stops it."""
+    """Valid JSON, wrong shape, and two false Windows claims: the schema check stops it, and
+    check 9 (Phase 10) names the claims (ungrounded on this non-Windows alert, and contradicted)."""
     install(monkeypatch, Router("chat_real_status_logon.json"))
     Path("one.json").write_text(WAZUH.read_text(encoding="utf-8").splitlines()[0], encoding="utf-8")
     status, out, _err = run(["triage", "--provider", "ollama", "one.json"], capsys)
@@ -180,7 +195,16 @@ def test_the_real_recorded_reply_goes_to_human_review_and_is_never_shown(
     entry = report()["alerts"][0]
     assert (entry["status"], entry["reason_codes"]) == (
         "needs_human_review",
-        ["schema.schema_violation", "actions.missing", "mitre.missing"],
+        [
+            "schema.schema_violation",
+            "actions.missing",
+            "mitre.missing",
+            "kb.ungrounded_event_id",
+            "kb.ungrounded_logon_type",
+            "kb.ungrounded_status",
+            "kb.contradiction_logon_type",
+            "kb.contradiction_status",
+        ],
     )
     text = out + Path("reports/report.md").read_text(encoding="utf-8") + json.dumps(report())
     assert "network logon" not in text

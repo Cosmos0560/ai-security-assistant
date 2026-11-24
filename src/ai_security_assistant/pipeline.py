@@ -227,11 +227,12 @@ def _decide(
     result: TriageResult,
     config: DefenseConfig,
     canary: str,
+    pattern: PatternFact | None = None,
 ) -> tuple[Status, AcceptedVerdict | None, tuple[str, ...]]:
     if result.status is TriageStatus.BUDGET_EXHAUSTED:
         return Status.BUDGET_EXHAUSTED, None, (REASON_BUDGET_EXHAUSTED,)
     if config.validator:
-        checked = validate(result, alert, canary)
+        checked = validate(result, alert, canary, pattern)
         if checked.output is None:
             return Status.NEEDS_HUMAN_REVIEW, None, checked.reasons
         return Status.TRIAGED, AcceptedVerdict.from_output(checked.output), ()
@@ -253,7 +254,7 @@ def run_alert(
     """One alert through the stages ``config`` switches on. Never raises for a bad reply.
 
     ``pattern`` is the alert's batch fact (D41). Reference facts are input preparation (D22): on
-    in every configuration except ``none``.
+    in every configuration except ``none``. The validator also gets ``pattern`` (check 9, D42).
     """
     detector: DetectorSummary | None = None
     facts: ReferenceFacts | None = None
@@ -277,7 +278,7 @@ def run_alert(
     else:
         user = plain_prompt(alert)
     result = triage_alert(provider, system, user)
-    status, verdict, reasons = _decide(alert, result, config, canary)
+    status, verdict, reasons = _decide(alert, result, config, canary, pattern)
     return AlertOutcome(
         alert=alert,
         status=status,
@@ -306,7 +307,8 @@ def run_pipeline(
     system, prompt_version = system_prompt_for(config, canary)
     batch = list(alerts)
     # D41: the pattern of a source address needs the whole batch, so it is computed before the loop.
-    patterns = batch_patterns(batch) if config.sanitize_wrap else {}
+    # Both the reference block and validator check 9 (D42) use it.
+    patterns = batch_patterns(batch) if config.sanitize_wrap or config.validator else {}
     outcomes: Sequence[AlertOutcome] = [
         run_alert(
             alert,

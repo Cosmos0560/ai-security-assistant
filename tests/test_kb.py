@@ -182,7 +182,10 @@ def test_a_locked_out_account_is_a_4625_not_a_contradiction_in_the_table() -> No
     assert "locked out" in table.statuses["0xC0000234"].aliases
     assert "locked out" not in table.events["4740"].aliases
     assert "account locked out" not in table.events["4740"].aliases
-    assert "0xC0000234" in table.events["4625"].meaning
+    # The note stays in the 4625 meaning, in words: since Phase 10 a meaning names no other code
+    # (KB self-consistency), and the 0xC0000234 entry carries the code itself.
+    assert "locked-out account" in table.events["4625"].meaning
+    assert "0x" not in table.events["4625"].meaning
 
 
 def test_the_sources_name_where_each_code_is_documented() -> None:

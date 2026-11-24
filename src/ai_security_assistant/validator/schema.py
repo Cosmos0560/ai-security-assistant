@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
+from ai_security_assistant.kb import PatternFact
 from ai_security_assistant.models import Alert
 from ai_security_assistant.schema import TriageOutput
 from ai_security_assistant.triage import (
@@ -168,7 +169,8 @@ def read_permissive(raw_text: str | None) -> PermissiveOutput:
 
 @dataclass(frozen=True)
 class Context:
-    """Everything a check may look at. ``strict`` is set exactly when the strict parse passed."""
+    """Everything a check may look at. ``strict`` is set exactly when the strict parse passed.
+    ``pattern`` is the alert's trusted D41 batch fact, or ``None`` (check 9 reads it)."""
 
     result: TriageResult
     alert: Alert
@@ -176,9 +178,12 @@ class Context:
     strict: TriageOutput | None
     strict_reason: str | None
     view: PermissiveOutput = field(repr=False)
+    pattern: PatternFact | None = None
 
 
-def build_context(result: TriageResult, alert: Alert, canary: str) -> Context:
+def build_context(
+    result: TriageResult, alert: Alert, canary: str, pattern: PatternFact | None = None
+) -> Context:
     raw = result.raw_text
     if raw is None:
         strict, reason = None, None
@@ -191,6 +196,7 @@ def build_context(result: TriageResult, alert: Alert, canary: str) -> Context:
         strict=strict,
         strict_reason=reason,
         view=read_permissive(raw),
+        pattern=pattern,
     )
 
 

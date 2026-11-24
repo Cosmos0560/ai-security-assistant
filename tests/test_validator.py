@@ -109,6 +109,7 @@ def test_checks_run_in_the_d12_order() -> None:
         "limits",
         "secrets",
         "severity",
+        "kb",
     ]
 
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "kb_version": "2026.11.1",
+  "kb_version": "2026.11.2",
   "about": "Windows Security log facts for the trusted reference block (D39, D40) and validator check 9 (D42). Every entry is a short paraphrase of Microsoft's documentation, with a source. Codes missing from this table fail closed. Extend by hand, with a source for each entry.",
   "events": {
     "4624": {
@@ -17,7 +17,7 @@
     },
     "4625": {
       "name": "An account failed to log on",
-      "meaning": "A logon attempt failed. The Status and SubStatus fields give the reason. An attempt against a locked-out account is also logged as 4625, with Status 0xC0000234.",
+      "meaning": "A logon attempt failed. The Status and SubStatus fields give the reason. An attempt against a locked-out account is also logged as this event, and its Status then says that the account is locked out.",
       "aliases": [
         "failed logon",
         "failed login",
@@ -89,7 +89,7 @@
     },
     "4740": {
       "name": "A user account was locked out",
-      "meaning": "An account was locked out. It records the moment the account becomes locked. Later failed logons against that account are event 4625 with Status 0xC0000234.",
+      "meaning": "An account was locked out. It records the moment the account becomes locked. Later attempts to log on to that account fail, each with a Status that says the account is locked out.",
       "aliases": [
         "user account was locked out",
         "lockout event",
@@ -151,7 +151,7 @@
     },
     "8": {
       "name": "NetworkCleartext",
-      "meaning": "A user logged on from the network, and the password was passed to the authentication package in unhashed form.",
+      "meaning": "A user logged on to this computer remotely, and the password was passed to the authentication package in unhashed (cleartext) form.",
       "aliases": [
         "networkcleartext",
         "network cleartext",
@@ -162,7 +162,7 @@
     },
     "9": {
       "name": "NewCredentials",
-      "meaning": "A caller cloned its current token and supplied new credentials for outbound network connections. The local identity stays the same.",
+      "meaning": "A caller cloned its current token and supplied new credentials for outbound connections to other computers. The local identity stays the same.",
       "aliases": [
         "newcredentials",
         "new credentials",
@@ -184,7 +184,7 @@
     },
     "11": {
       "name": "CachedInteractive",
-      "meaning": "A user logged on with network credentials stored locally on the computer. The domain controller was not contacted.",
+      "meaning": "A user logged on with domain credentials stored locally on the computer. The domain controller was not contacted.",
       "aliases": [
         "cachedinteractive",
         "cached interactive",
@@ -197,7 +197,7 @@
   "statuses": {
     "0xC000006D": {
       "name": "STATUS_LOGON_FAILURE",
-      "meaning": "Logon failure: bad username or authentication information. Commonly paired with a more specific Sub Status (for example 0xC0000064 or 0xC000006A).",
+      "meaning": "Logon failure: bad username or authentication information. Commonly paired with a more specific Sub Status that gives the exact cause.",
       "aliases": [
         "generic logon failure",
         "bad user name or password",
@@ -262,7 +262,8 @@
         "logon type not granted",
         "logon right not granted",
         "logon type is not granted",
-        "not been granted the requested logon type"
+        "not been granted the requested logon type",
+        "not been granted the requested logon right"
       ],
       "source": "Verified against Microsoft Learn, 'Event 4625(F)', Status and Sub Status table"
     },

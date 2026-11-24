@@ -726,6 +726,16 @@ def check_kb() -> list[str]:
     return kb_problems(normalize_lf(KB_FILE.read_bytes()).decode("utf-8"))
 
 
+KB_SELFCHECK_MODULE = "ai_security_assistant.kb.selfcheck"
+
+
+def check_kb_selfcheck() -> list[str]:
+    """Every entry's own reference text, used as the model's summary on an alert that has that
+    entry, passes validator check 9 (D42), quoted and as a plain claim (P10). It needs the
+    package, so it runs in the project venv and the gate itself stays stdlib-only."""
+    return run_tool([sys.executable, "-m", KB_SELFCHECK_MODULE])
+
+
 # --------------------------------------------------------------------------- README metrics (P6)
 
 README = ROOT / "README.md"
@@ -1124,6 +1134,7 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
     ("vendor integrity (manifest, version)", check_vendor_integrity),
     ("eval dataset invariants", check_dataset),
     ("Windows KB invariants", check_kb),
+    ("Windows KB reference text passes validator check 9", check_kb_selfcheck),
     ("README metrics block matches the eval", check_readme_metrics),
     ("graph output not staged, ignored", check_graph),
     ("commit hygiene (no AGENTS.md, .codex, .env)", check_hygiene),

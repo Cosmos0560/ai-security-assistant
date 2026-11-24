@@ -19,7 +19,7 @@ In ``report.md`` it is then also Markdown-neutralized:
 
 Raw model text is NEVER written to ``report.md``. ``report.json`` holds it only with
 ``include_raw`` (off by default), as a JSON string with ``ensure_ascii``. An accepted verdict is
-not raw text: with the validator on it passed all eight checks; with the validator off (the
+not raw text: with the validator on it passed all nine checks; with the validator off (the
 Python-API ablation only) it is what the undefended system accepted, escaped like any other
 untrusted value.
 """

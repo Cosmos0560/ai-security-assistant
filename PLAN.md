@@ -876,6 +876,21 @@ The check is on wherever the validator is on (`validator-only`, `all`). Residual
 in the README: a paraphrased misstatement with no code next to it ("the user lacks the right to
 log on here") passes. That blind spot is the same kind as D34. The report's reference-facts
 section is the mitigation: the analyst sees the true meaning next to the model's summary.
+Phase 10 details (owner-approved): an `undetermined` group claimed as T1110.001 or T1110.003 is
+`kb.unsupported_pattern` (alerts with no pattern fact are not checked); a clause ends at a
+sentence end, a line break, the next code or 200 characters, and continues into ONE more sentence
+only when that sentence opens with a back-reference ("this/that/the (error) code/status/value",
+"it"); on a line with a "logon type" anchor, list items (`10 for "x"`, `10 = x`, `10: x`,
+`10 (x)`) followed by a logon-type alias are mentions; `kb.not_recorded_claim` flags only text
+that attributes the password to the log ("the attempted password was", "each attempt used a
+different password", "the event shows the password", "the logged password was"), never generic
+attacker behaviour ("the attacker is trying different passwords"); a faithful echo of the
+reference block passes: a span that reproduces the name or meaning of one of the alert's own
+entries is not scanned when it sits next to that entry's own code (or no code); the table gains
+the alias "not been granted the requested logon right" (0xC000015B) and its meanings name no
+other code and no other entry's alias, which `kb/selfcheck.py` (gate) enforces (`kb_version`
+2026.11.2). Blind spots recorded with the paraphrase one: a lockout described with no code near it,
+"different passwords are tried in sequence", and an entry's meaning placed BEFORE a wrong code.
 Rejected: an LLM judge (a second injection surface); repairing the summary (D12: no repair).
 
 **D43. A separate Windows-auth eval set, a seventh attack goal, and "triage accuracy".**

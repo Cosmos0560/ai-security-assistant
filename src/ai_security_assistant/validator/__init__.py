@@ -1,7 +1,7 @@
-"""The output validator (D12): eight ordered checks, fail closed to ``needs_human_review``.
+"""The output validator (D12): nine ordered checks, fail closed to ``needs_human_review``.
 
 Input: the ``TriageResult`` (its ``raw_text`` included) and the ORIGINAL ``Alert``, plus the
-run's canary. Checks, in order:
+run's canary and the alert's trusted D41 pattern fact (if any). Checks, in order:
 
 1. ``schema``    the reply parses strictly into ``TriageOutput`` and agrees with the status;
 2. ``actions``   every recommended action is on the allowlist enum;
@@ -10,7 +10,10 @@ run's canary. Checks, in order:
 5. ``canary``    the run's canary is not in the reply (``detector/canary.py`` matching);
 6. ``limits``    the reply and every string in it are within the length limits;
 7. ``secrets``   the vendored secret-scanner finds nothing in the reply;
-8. ``severity``  the severity is not below the floor from the source's own severity (D33).
+8. ``severity``  the severity is not below the floor from the source's own severity (D33);
+9. ``kb``        every Windows event, logon type and status the reply names is in the table, is
+   the alert's own, and is not paired with another entry's meaning; the technique agrees with
+   the batch pattern; the reply does not claim the log records what it never records (D42).
 
 Every check runs, and every failure is reported, so a reply that already failed the strict parse
 still gets precise reasons from the permissive reading (see ``validator/schema.py``). Any failed
@@ -34,12 +37,14 @@ from enum import StrEnum
 from typing import Final
 
 from ai_security_assistant.detector.canary import canary_leaked
+from ai_security_assistant.kb import PatternFact
 from ai_security_assistant.models import Alert
 from ai_security_assistant.schema import TriageOutput
 from ai_security_assistant.triage import TriageResult
 from ai_security_assistant.validator import (
     actions,
     grounding,
+    kb,
     limits,
     mitre,
     schema,
@@ -94,6 +99,7 @@ CHECKS: tuple[tuple[str, Check], ...] = (
     ("limits", limits.check),
     ("secrets", secrets.check),
     ("severity", severity.check),
+    ("kb", kb.check),
 )
 
 
@@ -101,10 +107,12 @@ def _review(reasons: list[str]) -> ValidationResult:
     return ValidationResult(Verdict.NEEDS_HUMAN_REVIEW, None, tuple(dict.fromkeys(reasons)))
 
 
-def validate(result: TriageResult, alert: Alert, canary: str) -> ValidationResult:
+def validate(
+    result: TriageResult, alert: Alert, canary: str, pattern: PatternFact | None = None
+) -> ValidationResult:
     """Run every check in order. Never raises; fails closed."""
     try:
-        ctx = build_context(result, alert, canary)
+        ctx = build_context(result, alert, canary, pattern)
     except Exception:
         return _review([f"{VALIDATOR}.{RULE_EXCEPTION}"])
     reasons: list[str] = []
