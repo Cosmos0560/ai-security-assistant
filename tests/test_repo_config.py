@@ -62,8 +62,28 @@ def test_gitattributes_forces_lf() -> None:
 def test_gitignore_covers_required_paths() -> None:
     lines = set(read(".gitignore").splitlines())
     for entry in (".venv/", ".venv-wsl/", ".venv-release/", "build/", "dist/", "*.egg-info/",
-                  "reports/", "graphify-out/"):  # fmt: skip
+                  "reports/", "graphify-out/", ".env", "*.checkpoint.jsonl"):  # fmt: skip
         assert entry in lines
+    assert ".env.example" not in lines  # the example is committed
+
+
+def test_env_example_parses_with_the_real_reader_and_names_the_defaults() -> None:
+    from ai_security_assistant.config import ALLOWED_KEYS, parse_dotenv
+    from ai_security_assistant.providers.ollama import (
+        DEFAULT_BASE_URL,
+        DEFAULT_MODEL,
+        DEFAULT_TIMEOUT_SECONDS,
+        parse_base_url,
+        parse_timeout,
+    )
+
+    values = parse_dotenv(read(".env.example"))
+    assert tuple(values) == ALLOWED_KEYS
+    assert values["LLM_PROVIDER"] == "mock"  # the example never switches a provider on
+    assert values["OLLAMA_BASE_URL"] == DEFAULT_BASE_URL == parse_base_url(DEFAULT_BASE_URL)
+    assert values["OLLAMA_MODEL"] == DEFAULT_MODEL
+    assert parse_timeout(values["OLLAMA_TIMEOUT_SECONDS"]) == DEFAULT_TIMEOUT_SECONDS
+    assert "API_KEY" not in read(".env.example").replace("ANTHROPIC_API_KEY in the environment", "")
 
 
 def test_license_is_mit_with_name_only() -> None:

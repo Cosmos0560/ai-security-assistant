@@ -76,6 +76,23 @@ GET_PROCESS_KILL_RE = re.compile(
     r"get-process(?![^|]*\s-id\b)[^|]*\|\s*stop-process", re.IGNORECASE | re.DOTALL
 )
 PS_STOP_NAME_RE = re.compile(r"^-n(?:a(?:m(?:e)?)?)?$", re.IGNORECASE)
+# Ollama (CLAUDE.md, Host safety): only the read-only subcommands are allowed. Everything else
+# (pull, push, rm, cp, create, serve, stop, run, an unknown word) is refused, so the model and the
+# service the owner runs stay exactly as they are.
+OLLAMA_READ_ONLY = frozenset(
+    {"list", "ls", "ps", "show", "help", "version", "--version", "-v", "--help", "-h"}
+)
+OLLAMA_PORT_RE = re.compile(r":11434(?!\d)")
+OLLAMA_HTTP_CLIENTS = frozenset(
+    {"curl", "wget", "invoke-webrequest", "invoke-restmethod", "iwr", "irm", "http", "https"}
+)
+SERVICE_TOOLS = frozenset({"net", "net1", "sc"})
+SERVICE_VERBS = frozenset({"stop", "start", "restart", "config", "delete", "pause", "continue"})
+SERVICE_CMDLETS = frozenset(
+    {"stop-service", "start-service", "restart-service", "set-service", "suspend-service",
+     "resume-service", "remove-service", "new-service"}
+)  # fmt: skip
+SETENV_CALL = "::setenvironmentvariable"  # the .NET call, after base_name lower-cases it
 PORT_RES = (
     re.compile(r"(?:^|\s)(?:-p|--publish|-publish)[=\s]*(?:[\d.]+:)?8080(?!\d)"),
     re.compile(r"--port[=\s]+8080(?!\d)"),
@@ -487,6 +504,23 @@ def check_wsl(args: list[str]) -> list[str]:
     return inner
 
 
+def check_ollama(cmd: str, args: list[str]) -> None:
+    """Refuse every way to change Ollama (models, service, configuration) or to talk to it
+    directly. The only sanctioned calls to it are ``aisa`` and the ``live``-marked test."""
+    low_args = [a.lower() for a in args]
+    mentions = any("ollama" in a for a in low_args)
+    if cmd == "ollama" and low_args and low_args[0] not in OLLAMA_READ_ONLY:
+        raise BlockError("ollama is read-only here: only list, ps, show and --version are allowed")
+    if cmd in SERVICE_TOOLS and mentions and any(a in SERVICE_VERBS for a in low_args):
+        raise BlockError("changing the Ollama service is blocked")
+    if cmd in SERVICE_CMDLETS and mentions:
+        raise BlockError("changing the Ollama service is blocked")
+    if cmd == "setx" and mentions:
+        raise BlockError("changing Ollama's configuration is blocked")
+    if cmd in OLLAMA_HTTP_CLIENTS and any(OLLAMA_PORT_RE.search(a) for a in args):
+        raise BlockError("calls to Ollama go through aisa or the live test, not through " + cmd)
+
+
 def check_port(segment_text: str) -> None:
     for pattern in PORT_RES:
         if pattern.search(segment_text):
@@ -545,6 +579,7 @@ def check_tokens(
     if cmd == "git":
         check_git(args, tool, segments, index, raw, nested)
         return
+    check_ollama(cmd, args)
     if cmd in {"docker", "docker-compose", "podman"}:
         if "prune" in low_args:
             raise BlockError("docker prune is blocked")
@@ -572,6 +607,16 @@ def check_command(command: str, tool: str, depth: int = 0, nested: bool = False)
     for k, seg in enumerate(segments):
         if "gate.py" in seg.text and seg.sep_after == "|":
             raise BlockError("do not pipe the gate: a pipe hides its exit code")
+        # [Environment]::SetEnvironmentVariable('OLLAMA_...', ...): the call is one segment and
+        # its arguments the next (the parentheses split them). Text that merely mentions it
+        # (echo, grep, a heredoc body) is not a call.
+        words = tokenize(seg.text)
+        if (
+            words
+            and base_name(words[0]).endswith(SETENV_CALL)
+            and any("ollama" in s.text.lower() for s in segments[k : k + 2])
+        ):
+            raise BlockError("changing Ollama's configuration is blocked")
         check_tokens(tokenize(seg.text), tool, segments, k, command, nested, depth)
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Project gate, final state (Phase 7): the default checks, plus ``--full`` for the release check.
+"""Project gate (Phase 8 state): the default checks, plus ``--full`` for the release check.
 
 Stdlib only (plus the project's own vendored, stdlib-only secret-scanner). No shell pipes. Same
 behaviour on Windows and in WSL. Prints one line per check and exits non-zero on the first
@@ -674,10 +674,17 @@ def check_graph() -> list[str]:
     return problems
 
 
+def _is_dotenv(name: str) -> bool:
+    """``.env`` and ``.env.<anything>``, except the committed ``.env.example`` (D38)."""
+    return name == ".env" or (name.startswith(".env.") and name != ".env.example")
+
+
 def hygiene_problems(paths: Iterable[str]) -> list[str]:
     problems: list[str] = []
     for p in paths:
         parts = p.split("/")
+        if _is_dotenv(parts[-1]):
+            problems.append(f"{parts[-1]} must not be tracked or staged: {p}")
         if parts[-1].lower() == "agents.md":
             problems.append(f"AGENTS.md must not be tracked or staged: {p}")
         if ".codex" in parts[:-1] or parts[0] == ".codex":
@@ -687,6 +694,98 @@ def hygiene_problems(paths: Iterable[str]) -> list[str]:
 
 def check_hygiene() -> list[str]:
     return hygiene_problems(tracked_paths())
+
+
+# --------------------------------------------------------------------------- Ollama provider (P8)
+
+PACKAGE_DIR = SRC / "ai_security_assistant"
+OLLAMA_MODULE = PACKAGE_DIR / "providers" / "ollama.py"
+OLLAMA_REL = "src/ai_security_assistant/providers/ollama.py"
+OLLAMA_MODEL_CONSTANT = "DEFAULT_MODEL"
+# Recorded /api/chat bodies name the model that produced them; they are data, not code (D37).
+MODEL_LITERAL_EXEMPT = ("tests/fixtures/ollama/",)
+MODEL_LITERAL_ROOTS = ("src", "tests")
+_DYNAMIC_IMPORTS = frozenset({"import_module", "__import__"})
+
+
+def import_problems(source: str, filename: str, allowed_roots: Iterable[str]) -> list[str]:
+    """One message per import in ``source`` of a module outside the standard library and
+    ``allowed_roots``. Relative imports stay inside the project. A dynamic import (import_module,
+    __import__) is refused too: it could load anything."""
+    tree = ast.parse(source, filename=filename)
+    allowed = set(allowed_roots) | set(sys.stdlib_module_names)
+    problems: list[str] = []
+
+    def add(node: ast.AST, what: str) -> None:
+        problems.append(f"{filename}:{getattr(node, 'lineno', 0)}: {what}")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] not in allowed:
+                    add(node, f"import of {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and (node.module or "").split(".")[0] not in allowed:
+                add(node, f"import from {node.module}")
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            if name in _DYNAMIC_IMPORTS:
+                add(node, f"dynamic import via {name}")
+    return problems
+
+
+def check_ollama_imports() -> list[str]:
+    """``providers/ollama.py`` imports only the standard library and project modules (D36)."""
+    source = OLLAMA_MODULE.read_text(encoding="utf-8")
+    return import_problems(source, OLLAMA_REL, ("ai_security_assistant",))
+
+
+def default_model_value(source: str, constant: str = OLLAMA_MODEL_CONSTANT) -> str:
+    """The string assigned to the module-level ``constant`` in ``source``."""
+    for node in ast.parse(source).body:
+        target = node.target if isinstance(node, ast.AnnAssign) else None
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(target, ast.Name)
+            and target.id == constant
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            return node.value.value
+    raise ValueError(f"no string constant {constant} in the Ollama provider")
+
+
+def model_literal_problems(model: str, files: Iterable[tuple[str, str]]) -> list[str]:
+    """The default model name may appear only in its constant: once in the provider module and
+    nowhere else under ``src/`` or ``tests/`` (docs, README and .env.example may name it)."""
+    problems: list[str] = []
+    for rel, text in files:
+        if rel.startswith(MODEL_LITERAL_EXEMPT):
+            continue
+        count = text.count(model)
+        if rel == OLLAMA_REL and count != 1:
+            problems.append(f"{rel}: the default model must appear exactly once, found {count}")
+        elif rel != OLLAMA_REL and count:
+            problems.append(f"{rel}: the default model literal belongs in {OLLAMA_REL} only")
+    return problems
+
+
+def _text_files(roots: Iterable[str]) -> Iterable[tuple[str, str]]:
+    for root in roots:
+        for path in sorted((ROOT / root).rglob("*")):
+            rel = path.relative_to(ROOT).as_posix()
+            if not path.is_file() or "__pycache__" in rel.split("/"):
+                continue
+            data = path.read_bytes()
+            if b"\0" in data:
+                continue  # binary file
+            yield rel, normalize_lf(data).decode("utf-8", "replace")
+
+
+def check_model_literal() -> list[str]:
+    model = default_model_value(OLLAMA_MODULE.read_text(encoding="utf-8"))
+    return model_literal_problems(model, _text_files(MODEL_LITERAL_ROOTS))
 
 
 # --------------------------------------------------------------------------- external tools
@@ -935,7 +1034,9 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
     ("eval dataset invariants", check_dataset),
     ("README metrics block matches the eval", check_readme_metrics),
     ("graph output not staged, ignored", check_graph),
-    ("commit hygiene", check_hygiene),
+    ("commit hygiene (no AGENTS.md, .codex, .env)", check_hygiene),
+    ("ollama provider imports only stdlib and project modules", check_ollama_imports),
+    ("default model literal only in its constant", check_model_literal),
 ]
 
 

@@ -27,3 +27,9 @@ reports/
 
 # Graphify output (never committed; confirmed in Phase 1 step 6)
 graphify-out/
+
+# Local configuration (D38): holds no secret by rule, but is never committed. .env.example is.
+.env
+
+# Resumable live-eval checkpoints hold model text (D44); never committed.
+*.checkpoint.jsonl

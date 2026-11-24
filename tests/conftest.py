@@ -49,6 +49,20 @@ def _block_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(socket, "create_connection", _blocked)
 
 
+# The settings ``aisa triage`` reads (config.py). A developer's shell or ``.env`` must never change
+# what a test does, so every test starts without them and without a ``.env`` to read (D38).
+CONFIG_VARIABLES = ("LLM_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_MODEL", "OLLAMA_TIMEOUT_SECONDS")
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from ai_security_assistant import cli
+
+    for name in CONFIG_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(cli, "DOTENV_PATH", tmp_path / "no-dotenv-under-test")
+
+
 @pytest.fixture(scope="session")
 def gate() -> ModuleType:
     return load_script("aisa_gate", "scripts/gate.py")

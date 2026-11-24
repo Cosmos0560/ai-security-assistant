@@ -1,0 +1,21 @@
+{
+  "models": [
+    {
+      "name": "qwen3:8b",
+      "model": "qwen3:8b",
+      "modified_at": "2026-11-20T09:00:00.000000Z",
+      "size": 5225388164,
+      "digest": "fixture-digest-not-a-real-hash",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen3",
+        "families": [
+          "qwen3"
+        ],
+        "parameter_size": "8.2B",
+        "quantization_level": "Q4_K_M"
+      }
+    }
+  ]
+}

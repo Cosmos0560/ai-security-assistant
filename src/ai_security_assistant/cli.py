@@ -2,6 +2,9 @@
 
 ``aisa triage`` runs the full pipeline with EVERY defense on (``DefenseConfig.ALL``): sanitize +
 wrap, detector, one provider call per alert (``--provider``, ``--max-calls``) and the validator.
+The provider is ``--provider``, else ``LLM_PROVIDER`` (environment, then ``.env`` in the current
+directory, ``config.py``), else ``mock``; ``ollama`` runs a health check first and exits 2 with a
+clear message if Ollama is down or the model is missing. ``aisa eval`` ignores ``LLM_PROVIDER``.
 It writes ``report.md`` and ``report.json`` into ``--out-dir`` (default ``reports/``) and refuses
 to overwrite them without ``--force``; ``--include-raw`` adds the raw model replies to
 ``report.json`` only. There is deliberately no option to weaken the defenses: the ablation
@@ -39,6 +42,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ai_security_assistant import __version__
+from ai_security_assistant.config import (
+    DOTENV_NAME,
+    ConfigError,
+    load_settings,
+    resolve_provider,
+)
 from ai_security_assistant.detector.heuristics import detect
 from ai_security_assistant.eval.dataset import load_dataset
 from ai_security_assistant.eval.metrics import compute_metrics, per_sample
@@ -64,6 +73,8 @@ CLI_DEFENSES = DefenseConfig.ALL
 # ``aisa eval`` providers: the mocks (the default, offline) or the optional live eval.
 EVAL_PROVIDERS = ("mock", "anthropic")
 LIVE_ENV = "AISA_LIVE"
+# Where ``aisa triage`` looks for ``.env``: the current directory only. Tests replace it.
+DOTENV_PATH = Path(DOTENV_NAME)
 
 
 def utc_now() -> datetime:
@@ -109,9 +120,10 @@ def build_parser() -> argparse.ArgumentParser:
     triage.add_argument(
         "--provider",
         choices=PROVIDER_NAMES,
-        default="mock",
-        help="model provider (default: mock, which is offline; anthropic needs the extra and "
-        "the ANTHROPIC_API_KEY environment variable)",
+        default=None,
+        help="model provider (default: LLM_PROVIDER from the environment or .env, else mock, "
+        "which is offline; anthropic needs the extra and the ANTHROPIC_API_KEY environment "
+        "variable; ollama needs a local Ollama with the model pulled)",
     )
     triage.add_argument(
         "--max-calls",
@@ -202,9 +214,14 @@ def _triage(args: argparse.Namespace, clock: Callable[[], datetime]) -> int:
     out_dir: Path = args.out_dir
     if out_dir.exists() and not out_dir.is_dir():
         return _error(f"{safe_repr(str(out_dir), 200)} is not a directory")
+    try:
+        settings = load_settings(os.environ, DOTENV_PATH)
+        provider_name = resolve_provider(args.provider, settings)
+    except ConfigError as exc:
+        return _error(str(exc))
     budget = CallBudget(args.max_calls)
     try:
-        provider = make_provider(args.provider, budget)
+        provider = make_provider(provider_name, budget, settings=settings)
     except ProviderConfigError as exc:
         return _error(str(exc))
     run = run_pipeline(alerts, provider, budget, config=CLI_DEFENSES)

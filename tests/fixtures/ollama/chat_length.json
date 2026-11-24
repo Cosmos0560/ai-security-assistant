@@ -1,0 +1,16 @@
+{
+  "model": "qwen3:8b",
+  "created_at": "2026-11-24T05:05:00.000000Z",
+  "message": {
+    "role": "assistant",
+    "content": "{\"severity\":\"low\",\"mitre_technique\":\"T1110\",\"summary\":\"Rule 5760 (sshd: authentication failed.) "
+  },
+  "done": true,
+  "done_reason": "length",
+  "total_duration": 41870000005,
+  "load_duration": 120000000,
+  "prompt_eval_count": 1210,
+  "prompt_eval_duration": 9400000000,
+  "eval_count": 118,
+  "eval_duration": 32300000000
+}

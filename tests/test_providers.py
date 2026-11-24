@@ -59,7 +59,7 @@ def test_the_error_hierarchy() -> None:
 
 
 def test_provider_names() -> None:
-    assert PROVIDER_NAMES == ("mock", "mock-naive", "anthropic")
+    assert PROVIDER_NAMES == ("mock", "mock-naive", "anthropic", "ollama")
 
 
 @pytest.mark.parametrize(("name", "cls"), [("mock", WellBehavedMock), ("mock-naive", NaiveMock)])
@@ -75,6 +75,43 @@ def test_make_provider_builds_the_mocks(name: str, cls: type) -> None:
 def test_make_provider_rejects_an_unknown_name() -> None:
     with pytest.raises(ProviderConfigError, match="unknown provider"):
         make_provider("gpt", CallBudget(1))
+
+
+def test_make_provider_ollama_runs_the_health_check_and_reads_the_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pathlib import Path
+
+    from ai_security_assistant.providers import ollama
+
+    fixtures = Path(__file__).parent / "fixtures" / "ollama"
+    seen: list[str] = []
+
+    def fake(request: object, timeout: float) -> bytes:
+        url = request.full_url  # type: ignore[attr-defined]
+        seen.append(url)
+        return (
+            fixtures / ("version.json" if url.endswith("version") else "tags.json")
+        ).read_bytes()
+
+    monkeypatch.setattr(ollama, "urllib_transport", fake)
+    budget = CallBudget(1)
+    provider = make_provider("ollama", budget, settings={"OLLAMA_BASE_URL": "http://127.0.0.1:5"})
+    assert isinstance(provider, ollama.OllamaProvider)
+    assert isinstance(provider, Provider)
+    assert seen == ["http://127.0.0.1:5/api/version", "http://127.0.0.1:5/api/tags"]
+    assert budget.used == 0  # the health check is not a model call
+
+
+def test_make_provider_ollama_down_is_a_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_security_assistant.providers import ollama
+
+    def down(_request: object, _timeout: float) -> bytes:
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(ollama, "urllib_transport", down)
+    with pytest.raises(ProviderConfigError, match="not reachable"):
+        make_provider("ollama", CallBudget(1))
 
 
 def test_make_provider_anthropic_without_a_key_is_a_config_error(

@@ -1,0 +1,16 @@
+{
+  "model": "qwen3:8b",
+  "created_at": "2026-11-24T05:04:00.000000Z",
+  "message": {
+    "role": "assistant",
+    "content": "<think>\nThe alert is an ssh failure; I should rate it low.\n</think>\n{\"severity\":\"low\",\"mitre_technique\":\"T1110\",\"summary\":\"Rule 5760 (sshd: authentication failed.) on host web01.example.test for user svc-test source 192.0.2.66: triaged from the alert fields only.\",\"recommended_actions\":[\"monitor\",\"collect_logs\"],\"confidence\":0.8}"
+  },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 41870000004,
+  "load_duration": 120000000,
+  "prompt_eval_count": 1210,
+  "prompt_eval_duration": 9400000000,
+  "eval_count": 118,
+  "eval_duration": 32300000000
+}

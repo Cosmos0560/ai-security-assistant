@@ -220,6 +220,130 @@ def test_allowed_powershell(hook: ModuleType, command: str) -> None:
     assert not blocked(hook, command, tool="PowerShell"), command
 
 
+# ---------------------------------------------------------------- Ollama (CLAUDE.md, Host safety)
+
+BLOCKED_OLLAMA = [
+    # the seven banned subcommands, plus run (a model call outside aisa), in many wrappers
+    "ollama pull somemodel:8b",
+    "ollama push someone/model",
+    "ollama rm somemodel:8b",
+    "ollama cp somemodel:8b copy",
+    "ollama create mymodel -f Modelfile",
+    "ollama serve",
+    "ollama stop somemodel:8b",
+    "ollama run somemodel:8b",
+    "ollama signin",
+    "ollama PULL somemodel:8b",
+    "ollama.exe pull somemodel:8b",
+    "/usr/local/bin/ollama pull somemodel:8b",
+    "'C:\\Program Files\\Ollama\\ollama.exe' pull x",
+    "OLLAMA_HOST=127.0.0.1:1 ollama pull x",
+    "env ollama pull x",
+    "sudo ollama serve",
+    "bash -c 'ollama pull x'",
+    "echo ok && ollama pull x",
+    "echo $(ollama pull x)",
+    "wsl ollama pull x",
+    "wsl -d Ubuntu -- ollama rm x",
+    "pwsh -Command ollama pull x",
+    "cmd /c ollama pull x",
+    "ollama list && ollama pull x",
+    # the service and its configuration
+    "net stop ollama",
+    "net start Ollama",
+    "sc stop ollama",
+    "sc config ollama start= disabled",
+    "sc delete ollama",
+    "Stop-Service ollama",
+    "Restart-Service -Name Ollama",
+    "Set-Service ollama -StartupType Disabled",
+    "setx OLLAMA_HOST 0.0.0.0",
+    "setx OLLAMA_MODELS D:\\models",
+    "[Environment]::SetEnvironmentVariable('OLLAMA_HOST','0.0.0.0','User')",
+    "powershell -Command \"[Environment]::SetEnvironmentVariable('OLLAMA_MODELS','x','Machine')\"",
+    # direct calls instead of aisa or the live test
+    "curl http://localhost:11434/api/tags",
+    "curl -s -X POST http://127.0.0.1:11434/api/generate -d '{}'",
+    "curl.exe http://localhost:11434/api/chat",
+    "wget http://localhost:11434/",
+    "Invoke-RestMethod http://localhost:11434/api/version",
+    "Invoke-WebRequest -Uri http://localhost:11434/api/tags",
+    "iwr http://localhost:11434",
+    "irm http://[::1]:11434/api/tags",
+    "bash -c 'curl localhost:11434'",
+]
+
+ALLOWED_OLLAMA = [
+    # the read-only subcommands the owner listed
+    "ollama list",
+    "ollama ls",
+    "ollama ps",
+    "ollama show somemodel:8b",
+    "ollama --version",
+    "ollama -v",
+    "ollama",
+    "ollama --help",
+    "ollama help",
+    "ollama list --help",
+    "ollama.exe list",
+    "OLLAMA_HOST=127.0.0.1:1 ollama list",
+    "wsl ollama --version",
+    # near misses: the word Ollama as text, or as a prose argument, is not a command
+    "echo ollama pull somemodel:8b",
+    "echo 'run ollama serve first'",
+    'echo "use [Environment]::SetEnvironmentVariable for OLLAMA_HOST"',
+    "grep -rn SetEnvironmentVariable docs",
+    "grep -rn 'ollama pull' README.md docs",
+    "git log --grep 'ollama pull'",
+    "git add .env.example",
+    "cat .env.example",
+    "ls ~/.ollama",
+    "python -m pytest tests/test_ollama_provider.py",
+    "python -m pytest tests/test_cli_ollama.py -k ollama_stopped",
+    ".venv/Scripts/python -m aisa triage x.json --provider ollama",
+    "aisa triage tests/fixtures/wazuh/alerts.jsonl --provider ollama",
+    "LLM_PROVIDER=ollama aisa triage x.json",
+    "net use",
+    "net stop spooler",
+    "sc query ollama",
+    "Get-Service ollama",
+    "Stop-Service spooler",
+    "setx PATH x",
+    "[Environment]::SetEnvironmentVariable('FOO','1','User')",
+    "curl http://localhost:8000/",
+    "curl http://localhost:114340/",
+    "curl http://example.test/ollama",
+    "Invoke-RestMethod http://localhost:8000/api",
+    "echo curl http://localhost:11434",
+    "grep -n 11434 src/ai_security_assistant/providers/ollama.py",
+    "git commit -m 'docs: ollama pull note, curl localhost:11434'".replace(
+        "git commit", GATE + "git commit"
+    ),
+]
+
+
+@pytest.mark.parametrize("command", BLOCKED_OLLAMA)
+def test_ollama_changes_and_direct_calls_are_blocked(hook: ModuleType, command: str) -> None:
+    assert blocked(hook, command), command
+    assert blocked(hook, command, tool="PowerShell"), command
+
+
+@pytest.mark.parametrize("command", ALLOWED_OLLAMA)
+def test_read_only_ollama_and_near_misses_are_allowed(hook: ModuleType, command: str) -> None:
+    assert not blocked(hook, command), command
+    if "git commit" not in command:  # commits are refused in the PowerShell tool by rule
+        assert not blocked(hook, command, tool="PowerShell"), command
+
+
+def test_the_ollama_block_reason_names_the_rule_not_the_command(hook: ModuleType) -> None:
+    reason = hook.evaluate(
+        {"tool_name": "Bash", "tool_input": {"command": "ollama pull some-model-name"}}
+    )
+    assert reason is not None
+    assert "read-only" in reason
+    assert "some-model-name" not in reason
+
+
 def test_other_tools_are_not_inspected(hook: ModuleType) -> None:
     assert hook.evaluate({"tool_name": "Read", "tool_input": {"file_path": "x"}}) is None
 

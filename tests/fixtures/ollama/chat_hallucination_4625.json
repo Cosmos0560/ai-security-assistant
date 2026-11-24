@@ -1,0 +1,16 @@
+{
+  "model": "qwen3:8b",
+  "created_at": "2026-11-24T05:06:00.000000Z",
+  "message": {
+    "role": "assistant",
+    "content": "| **Logon Type** | The type of logon (e.g., 3 for \"Network\", 10 for \"Interactive\") |\n| **Status** | ... (e.g., `0xC000006A` for \"The user has not been granted the requested logon right\" or `0xC000006D` for \"The user name or password is incorrect\") |\n- **Different passwords** are tried in sequence.\n- `\"The user has not been granted the requested logon right\"` (if the account is locked out)\n| 2025-03-01 10:00 | admin | 0xC000006D | Incorrect password |"
+  },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 41870000006,
+  "load_duration": 120000000,
+  "prompt_eval_count": 1210,
+  "prompt_eval_duration": 9400000000,
+  "eval_count": 118,
+  "eval_duration": 32300000000
+}
