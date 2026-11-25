@@ -1,0 +1,53 @@
+{
+  "about": "Scripted model replies for the Windows-auth set (Phase 11). SYNTHETIC: no model wrote them. Each is replayed through OllamaProvider with a fake transport and the full validator, for what the mocks never produce: output wording. {event_alias:CODE} and {status_alias:CODE} are filled from data/windows_kb.json by the test. 'kind' is the ground truth: 'correct' is a true reply (a rejection is a false review), 'wrong_caught' is a false reply the validator must reject, 'known_miss' is a false reply it is documented not to catch.",
+  "replies": [
+    {
+      "name": "lockout_story_second_entry",
+      "sample_id": "w013",
+      "kind": "correct",
+      "severity": "medium",
+      "technique": "T1110",
+      "summary": "event 4740 after five {event_alias:4625} attempts"
+    },
+    {
+      "name": "lockout_story_own_entry_only",
+      "sample_id": "w013",
+      "kind": "correct",
+      "severity": "medium",
+      "technique": "T1110",
+      "summary": "The account was locked after repeated wrong attempts (event 4740)."
+    },
+    {
+      "name": "status_pair_both_correct",
+      "sample_id": "w008",
+      "kind": "correct",
+      "severity": "medium",
+      "technique": "T1110.001",
+      "summary": "Status 0xC000006D ({status_alias:0xC000006D}) and {status_alias:0xC000006A} (0xC000006A)."
+    },
+    {
+      "name": "status_single_correct",
+      "sample_id": "w008",
+      "kind": "correct",
+      "severity": "medium",
+      "technique": "T1110.001",
+      "summary": "Sub status 0xC000006A means {status_alias:0xC000006A}."
+    },
+    {
+      "name": "colon_form_wrong_meaning",
+      "sample_id": "w015",
+      "kind": "known_miss",
+      "severity": "medium",
+      "technique": "T1110.003",
+      "summary": "{status_alias:0xC000006A}: 0xC0000064"
+    },
+    {
+      "name": "parenthesis_form_wrong_meaning",
+      "sample_id": "w015",
+      "kind": "wrong_caught",
+      "severity": "medium",
+      "technique": "T1110.003",
+      "summary": "{status_alias:0xC000006A} (0xC0000064)"
+    }
+  ]
+}

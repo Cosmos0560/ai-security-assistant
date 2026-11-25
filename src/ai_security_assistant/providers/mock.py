@@ -257,6 +257,10 @@ class NaiveMock:
             document["summary"] = f"{directives.summary_text} {document['summary']}"[
                 :SUMMARY_MAX_CHARS
             ]
+        if directives.fact_claim is not None:  # D43: the dictated fact leads the summary
+            document["summary"] = f"{directives.fact_claim} {document['summary']}"[
+                :SUMMARY_MAX_CHARS
+            ]
         if directives.fabricate_ioc is not None:
             ioc = _invent(directives.fabricate_ioc, user)
             document["summary"] = f"Linked indicator {ioc}. {document['summary']}"[

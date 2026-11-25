@@ -36,7 +36,9 @@ import sys
 import tempfile
 import tomllib
 import zipfile
+from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -635,6 +637,198 @@ def check_dataset() -> list[str]:
     return dataset_problems(DATASET.read_bytes().decode("utf-8"))
 
 
+# ------------------------------------------------------------------ Windows-auth set (D43, P11)
+
+# Again a stdlib-only reading with the lists written out; tests/test_gate_phase11.py checks they
+# equal the ones in eval/dataset.py. Codes and thresholds are read from the KB file, never typed.
+WINDOWS_DATASET = SRC / "ai_security_assistant" / "data" / "eval" / "windows_auth.jsonl"
+WINDOWS_GROUP_COUNTS = {
+    "single": 7,
+    "lockout": 2,
+    "spraying": 4,
+    "brute_force": 5,
+    "undetermined_2_users": 6,
+    "undetermined_5_users": 7,
+    "distributed_spraying": 4,
+    "low_and_slow_spraying": 4,
+    "locale_ru": 2,
+    "injection": 8,
+}
+WINDOWS_GOAL_COUNTS = {"fact_misstatement": 6, "forced_severity": 1, "summary_manipulation": 1}
+WINDOWS_SEVERITIES = ("info", "low", "medium", "high", "critical")
+WINDOWS_BLIND_SPOTS = ("distributed_spraying", "low_and_slow_spraying")
+# The groups whose D41 shape is checked against the KB's thresholds.
+WINDOWS_SHAPED_GROUPS = (
+    "spraying",
+    "brute_force",
+    "undetermined_2_users",
+    "undetermined_5_users",
+    *WINDOWS_BLIND_SPOTS,
+)
+# The only addresses outside the documentation ranges: the loopback edge cases, in ipAddress only.
+WINDOWS_LOOPBACK = frozenset({"127.0.0.1", "::1"})
+_NO_VALUE = "-"
+_NO_SUB_STATUS = "0x0"
+_WIN_USER_RE = re.compile(r"-|(?:user[0-9]{2}|admin-test|svc-test)")
+_WIN_TECHNIQUE_RE = re.compile(r"T[0-9]{4}(?:\.[0-9]{3})?")
+# Groups whose rule description and full_log are free text; everywhere else both must be the KB's
+# own name of the event, so no Windows meaning is typed into the set by hand.
+_WIN_FREE_TEXT = frozenset({"injection", "locale_ru"})
+
+
+def _windows_ip_problems(address: str) -> list[str]:
+    if address == _NO_VALUE or address in WINDOWS_LOOPBACK:
+        return []
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return ["ipAddress is not an address"]
+    return [] if any(parsed in net for net in DOC_IPV4) else ["ipAddress outside RFC 5737"]
+
+
+def _windows_record(row: dict[str, Any], kb: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    """The value rules of one row, and its eventdata plus ``eventID`` and ``timestamp``."""
+    record = json.loads(json.dumps(row["record"]))  # a copy: ipAddress is removed below
+    eventdata = record["data"]["win"]["eventdata"]
+    event_id = record["data"]["win"]["system"]["eventID"]
+    fields = {**eventdata, "eventID": event_id, "timestamp": record["timestamp"]}
+    problems: list[str] = []
+    address = eventdata.pop("ipAddress", None)
+    if address is not None:
+        problems += _windows_ip_problems(address)
+    for value in _strings({**row, "record": record}):
+        problems += string_problems(value)
+    if event_id not in kb["events"]:
+        problems.append("event ID not in the KB")
+    elif row["group"] not in _WIN_FREE_TEXT:
+        name = kb["events"][event_id]["name"]
+        if record["rule"]["description"] != name or record["full_log"] != name:
+            problems.append("rule description or full_log is not the KB event name")
+    if "logonType" in eventdata and eventdata["logonType"] not in kb["logon_types"]:
+        problems.append("logon type not in the KB")
+    statuses = {code.upper() for code in kb["statuses"]}
+    for key, extra in (("status", set()), ("subStatus", {_NO_SUB_STATUS.upper()})):
+        if key in eventdata and eventdata[key].upper() not in statuses | extra:
+            problems.append(f"{key} not in the KB")
+    # An injection sample may carry its payload in targetUserName; every other name is generic.
+    names = ("subjectUserName",)
+    if row["label"] != "injection":
+        names += ("targetUserName",)
+    if any(key in eventdata and not _WIN_USER_RE.fullmatch(eventdata[key]) for key in names):
+        problems.append("user name is not a generic test name")
+    return problems, fields
+
+
+def _seconds(stamp: str) -> float:
+    return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
+
+
+def _shape(events: Sequence[dict[str, str]]) -> tuple[int, int]:
+    """``(distinct users, most attempts by one user)``."""
+    users = Counter(event["targetUserName"] for event in events)
+    return len(users), max(users.values())
+
+
+def windows_group_problems(
+    groups: dict[str, list[dict[str, str]]], patterns: dict[str, Any]
+) -> list[str]:
+    """The D41 shape of every pattern group, from the KB's thresholds."""
+    window = patterns["window_seconds"]
+    spray, brute = patterns["password_spraying"], patterns["brute_force"]
+
+    def is_spray(shape: tuple[int, int]) -> bool:
+        users, most = shape
+        return users >= spray["min_distinct_users"] and most <= spray["max_attempts_per_user"]
+
+    def is_brute(shape: tuple[int, int]) -> bool:
+        users, most = shape
+        return users == brute["distinct_users"] and most >= brute["min_attempts"]
+
+    def one_group(events: Sequence[dict[str, str]]) -> bool:
+        times = [_seconds(event["timestamp"]) for event in events]
+        sources = {event.get("ipAddress") for event in events}
+        return len(sources) == 1 and max(times) - min(times) <= window
+
+    problems: list[str] = []
+    for name, events in sorted(groups.items()):
+        if not events:
+            problems.append(f"group {name} has no events")
+            continue
+        shape = _shape(events)
+        times = sorted(_seconds(event["timestamp"]) for event in events)
+        if name == "spraying":
+            good = one_group(events) and is_spray(shape)
+        elif name == "brute_force":
+            good = one_group(events) and is_brute(shape)
+        elif name == "distributed_spraying":  # spraying overall, one source address per event
+            good = is_spray(shape) and len({e.get("ipAddress") for e in events}) == len(events)
+        elif name == "low_and_slow_spraying":  # one source, every gap longer than the window
+            good = (
+                is_spray(shape)
+                and len({e.get("ipAddress") for e in events}) == 1
+                and all(b - a > window for a, b in zip(times, times[1:], strict=False))
+            )
+        else:  # the two undetermined groups
+            good = one_group(events) and not is_spray(shape) and not is_brute(shape)
+        if not good:
+            problems.append(f"group {name} does not have its D41 shape")
+    return problems
+
+
+def windows_dataset_problems(text: str, kb: dict[str, Any]) -> list[str]:
+    problems: list[str] = []
+    group_counts: Counter[str] = Counter()
+    goal_counts: Counter[str] = Counter()
+    shaped: dict[str, list[dict[str, str]]] = {name: [] for name in WINDOWS_SHAPED_GROUPS}
+    seen_events: set[str] = set()
+    seen_statuses: set[str] = set()
+    rows = [line for line in text.replace("\r\n", "\n").split("\n") if line.strip()]
+    for number, line in enumerate(rows, start=1):
+        try:
+            row = json.loads(line)
+            group = row["group"]
+            found, fields = _windows_record(row, kb)
+            technique = row["expected_technique"]
+            severity = row["expected_min_severity"]
+        except (ValueError, KeyError, TypeError, AttributeError):
+            problems.append(f"line {number}: not a Windows-set row")
+            continue
+        group_counts[group] += 1
+        if row.get("label") == "injection":
+            goal_counts[str(row.get("attack_goal"))] += 1
+        seen_events.add(fields["eventID"])
+        seen_statuses.update(
+            fields[key].upper() for key in ("status", "subStatus") if key in fields
+        )
+        if group in shaped:
+            shaped[group].append(fields)
+        if not isinstance(technique, str) or not _WIN_TECHNIQUE_RE.fullmatch(technique):
+            found.append("missing expected_technique label")
+        if severity not in WINDOWS_SEVERITIES:
+            found.append("missing expected_min_severity label")
+        pattern = kb["patterns"].get(str(row.get("truth_pattern")), {})
+        if "technique" in pattern and technique != pattern["technique"]:
+            found.append("expected_technique differs from the KB technique of truth_pattern")
+        miss = group if group in WINDOWS_BLIND_SPOTS else None
+        if row.get("known_miss") != miss:
+            found.append("known_miss must label exactly the blind-spot groups")
+        problems += [f"line {number}: {p}" for p in found]
+    if dict(group_counts) != WINDOWS_GROUP_COUNTS:
+        problems.append(f"group counts {dict(group_counts)} != {WINDOWS_GROUP_COUNTS}")
+    if dict(goal_counts) != WINDOWS_GOAL_COUNTS:
+        problems.append(f"goal counts {dict(goal_counts)} != {WINDOWS_GOAL_COUNTS}")
+    for event_id in sorted(set(kb["events"]) - seen_events):
+        problems.append(f"no sample of event {event_id}")
+    for status in sorted({code.upper() for code in kb["statuses"]} - seen_statuses):
+        problems.append(f"no sample of status {status}")
+    return problems + windows_group_problems(shaped, kb["patterns"])
+
+
+def check_windows_dataset() -> list[str]:
+    kb = json.loads(KB_FILE.read_bytes().decode("utf-8"))
+    return windows_dataset_problems(WINDOWS_DATASET.read_bytes().decode("utf-8"), kb)
+
+
 # --------------------------------------------------------------------------- Windows KB (P9)
 
 KB_FILE = SRC / "ai_security_assistant" / "data" / "windows_kb.json"
@@ -1135,6 +1329,7 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
     ("eval dataset invariants", check_dataset),
     ("Windows KB invariants", check_kb),
     ("Windows KB reference text passes validator check 9", check_kb_selfcheck),
+    ("Windows eval set invariants", check_windows_dataset),
     ("README metrics block matches the eval", check_readme_metrics),
     ("graph output not staged, ignored", check_graph),
     ("commit hygiene (no AGENTS.md, .codex, .env)", check_hygiene),

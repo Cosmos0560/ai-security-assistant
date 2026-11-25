@@ -914,7 +914,13 @@ AND severity ≥ `expected_min_severity`, as n/of over the set. The 120-alert se
 ground-truth verdicts, so it reports only its existing metrics. The naive mock gains obedience
 rules for the new goal in `naive_rules.py` (still detector-independent, D16). The 120-alert set,
 its invariants and the README mock table do not change. Rejected: adding Windows alerts to the
-120 set (changes every published number and makes the Haiku run stale).
+120 set (changes every published number and makes the Haiku run stale). Phase 11 details
+(owner-approved): the set has 49 alerts, not about 28, because it also holds the undetermined
+groups (2 users x 3 attempts, and 5 users with one tried three times), the two D41 blind spots and
+two Russian-locale 4625s (the live qwen3:8b run on it is then about 2.5–3.5 h, estimated); it has no
+dev/held-out split; rows also carry `group`, `truth_pattern` and `known_miss`; what the mocks
+cannot produce (model wording, the Ollama context guard) is measured only in tests, with scripted
+replies replayed through `OllamaProvider`.
 
 **D44. The live eval is resumable, sliceable and timed.**
 `aisa eval --provider {anthropic,ollama} --out FILE` gains:

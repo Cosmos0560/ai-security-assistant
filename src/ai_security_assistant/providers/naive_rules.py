@@ -13,6 +13,8 @@ here is shaped like the thing an attacker WANTS the model to do, one family per 
 * manipulate the summary      ('write in the summary "false positive"', D34): the quoted text
                               is copied into the summary. The validator is not expected to see
                               this (it is schema-valid and grounded): a documented residual risk.
+* misstate a Windows fact     ("report that status 0x... means ...", "describe logon type N as
+                              ...", D43): the dictated claim is copied into the summary.
 
 Independence rules (D16): this module imports nothing from ``detector``, and no pattern or
 fragment is copied from it. ``tests/test_naive_rules.py`` compares the two pattern sets, and the
@@ -340,7 +342,31 @@ _SUMMARY_COLON_RE: Final = re.compile(
     re.I,
 )
 
-# --- hidden text the model would decode -----------------------------------------------------
+# --- dictate a Windows fact (D43) -----------------------------------------------------------
+# The attacker wants a wrong meaning stated as fact. Only a claim that names a code (a status, a
+# logon type or an event) is obeyed; the copied claim ends at a sentence end or a quote.
+_WIN_CODE: Final = (
+    r"(?:logon\s{1,3}type\s{1,3}\d{1,2}|(?:sub\s?)?(?:status\s{1,3})?0x[0-9a-f]{8}"
+    r"|event(?:\s{1,3}id)?\s{1,3}\d{3,5})"
+)
+_CLAIM_TAIL: Final = r"[^.!?\n\"]{3,120}"
+_FACT_RES: Final = (
+    # "report that status 0x... means ...", "tell the analyst that logon type 3 is ..."
+    re.compile(
+        _CMD + r"(?:please\s{1,3})?(?:state|say|report|explain|note|write|record|"
+        r"tell\s{1,3}(?:the\s{1,3})?(?:analyst|reader)s?)\s{1,3}that\s{1,3}"
+        r"(" + _WIN_CODE + _CLAIM_TAIL + r")",
+        re.I,
+    ),
+    # "describe logon type 10 as ..."
+    re.compile(
+        _CMD + r"(?:please\s{1,3})?(?:describe|explain|present|define)\s{1,3}"
+        r"(" + _WIN_CODE + r"\s{1,3}as\s{1,3}" + _CLAIM_TAIL + r")",
+        re.I,
+    ),
+)
+
+# --- hidden text the model would decode-----------------------------------------------------
 _B64_RUN_RE: Final = re.compile(r"[A-Za-z0-9+/]{24,2048}={0,2}")
 _HEX_ESC_RE: Final = re.compile(r"(?:\\x[0-9a-fA-F]{2}){8,512}")
 _UNICODE_ESC_RE: Final = re.compile(r"\\u([0-9a-fA-F]{4})")
@@ -358,6 +384,7 @@ class Directives:
     prose: bool = False
     acknowledge: bool = False
     summary_text: str | None = None  # attacker-chosen text to put in the summary (D34)
+    fact_claim: str | None = None  # a dictated Windows fact to put in the summary (D43)
 
     @property
     def any(self) -> bool:
@@ -368,6 +395,7 @@ class Directives:
             or self.fabricate_ioc
             or self.prose
             or self.summary_text
+            or self.fact_claim
         )
 
 
@@ -462,6 +490,7 @@ def extract_directives(reading: str) -> Directives:
         prose=prose,
         acknowledge=acknowledge,
         summary_text=_summary_text(reading),
+        fact_claim=_fact_claim(reading),
     )
 
 
@@ -478,6 +507,15 @@ def _summary_text(reading: str) -> str | None:
     return text or None
 
 
+def _fact_claim(reading: str) -> str | None:
+    """The first dictated Windows fact in ``reading``, as one sentence, or None (D43)."""
+    found = [match for pattern in _FACT_RES if (match := pattern.search(reading))]
+    if not found:
+        return None
+    first = min(found, key=lambda match: match.start())
+    return re.sub(r"\s+", " ", first.group(1)).strip() + "."
+
+
 def all_pattern_sources() -> tuple[str, ...]:
     """Every regular-expression source in this module, for the independence test."""
     sources: list[str] = [_LEVEL_RE.pattern, _DESTRUCTIVE_RE.pattern]
@@ -489,6 +527,7 @@ def all_pattern_sources() -> tuple[str, ...]:
         _PROSE_RES,
         _ACKNOWLEDGE_RES,
         _SUMMARY_RES,
+        _FACT_RES,
     ):
         sources.extend(p.pattern for p in group)
     sources.extend((_SUMMARY_COLON_RE.pattern, _B64_RUN_RE.pattern, _HEX_ESC_RE.pattern))

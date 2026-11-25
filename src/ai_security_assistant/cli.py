@@ -18,6 +18,8 @@ decision as ``ensure_ascii`` JSON, and stops (no provider, no report).
 ``aisa eval [--out metrics.json] [--readme README.md]`` runs the Phase 6 ablation on the packaged
 dataset with the mock providers only (seeded, deterministic, offline). It prints the metrics JSON,
 or writes it to ``--out``; ``--readme`` rewrites the generated metrics block of that file.
+``--dataset windows`` runs the same mock ablation on the Windows-auth set (D43) and prints its own
+document; it has no README block and no live eval yet.
 
 ``aisa eval --provider anthropic --max-calls N --out FILE`` is the optional LIVE eval
 (docs/LIVE_EVAL.md). It spends real money, so it runs only with ``AISA_LIVE=1`` and a key, needs an
@@ -49,8 +51,12 @@ from ai_security_assistant.config import (
     resolve_provider,
 )
 from ai_security_assistant.detector.heuristics import detect
-from ai_security_assistant.eval.dataset import load_dataset
-from ai_security_assistant.eval.metrics import compute_metrics, per_sample
+from ai_security_assistant.eval.dataset import DATASET_NAMES, load_dataset, load_windows_dataset
+from ai_security_assistant.eval.metrics import (
+    compute_metrics,
+    compute_windows_metrics,
+    per_sample,
+)
 from ai_security_assistant.eval.readme_table import MarkerError, render_block, replace_block
 from ai_security_assistant.eval.runner import EvalRun, run_eval, run_live_eval
 from ai_security_assistant.ingest import FORMATS, IngestError, load_alerts
@@ -155,6 +161,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument(
         "--out", type=Path, help="write the metrics JSON here instead of printing it"
+    )
+    evaluate.add_argument(
+        "--dataset",
+        choices=DATASET_NAMES,
+        default="main",
+        help="main (default: the 120-alert set) or windows (the Windows-auth set; mock only)",
     )
     evaluate.add_argument(
         "--readme", type=Path, help="rewrite the generated metrics block in this README"
@@ -330,11 +342,19 @@ def _live_eval(args: argparse.Namespace) -> int:
 
 
 def _eval(args: argparse.Namespace) -> int:
+    windows = args.dataset == "windows"
     if args.provider != "mock":
+        if windows:
+            return _error("the live eval runs on the main dataset only; --dataset windows is mock")
         return _live_eval(args)
     if args.max_calls is not None:
         return _error("--max-calls applies to the live eval only (--provider anthropic)")
-    metrics = compute_metrics(run_eval(load_dataset()))
+    if windows and args.readme is not None:
+        return _error("the README metrics block is built from the main dataset only")
+    if windows:
+        metrics = compute_windows_metrics(run_eval(load_windows_dataset()))
+    else:
+        metrics = compute_metrics(run_eval(load_dataset()))
     text = metrics_json(metrics)
     try:
         if args.readme is not None:
