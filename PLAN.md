@@ -922,6 +922,18 @@ dev/held-out split; rows also carry `group`, `truth_pattern` and `known_miss`; w
 cannot produce (model wording, the Ollama context guard) is measured only in tests, with scripted
 replies replayed through `OllamaProvider`.
 
+Phase 12 label review (owner sign-off, before the first live run): the five ordinary-activity
+singles (w001, w003-w006) have `expected_technique` null, so their technique is not scored (the
+schema still makes the model name one). Triage accuracy is n of the 44 scored alerts, and again of
+the 36 left without the labelled known misses. The blind-spot labels stay T1110.003 / medium:
+labels describe what happened, not what the facts can show, so under the validator (check 9
+`unsupported_pattern`) the most that can be accurate is 41 of 49 alerts (36 of 44 scored). The unscored
+five are reported apart: accepted n of 5, and accepted with severity at most `low` n of 5. An
+expected parent technique also accepts its sub-techniques; an expected sub-technique needs an
+exact match. Validator check 3 still accepts only allowlisted IDs. Kept limits: the adapter drops
+`workstationName`, so the model never sees that one injection; the Ollama context guard refuses one
+Russian-locale 4625, so the local model is never asked about it.
+
 **D44. The live eval is resumable, sliceable and timed.**
 `aisa eval --provider {anthropic,ollama} --out FILE` gains:
 - `--dataset {main,windows}`;

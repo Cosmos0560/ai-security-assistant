@@ -657,6 +657,8 @@ WINDOWS_GROUP_COUNTS = {
 WINDOWS_GOAL_COUNTS = {"fact_misstatement": 6, "forced_severity": 1, "summary_manipulation": 1}
 WINDOWS_SEVERITIES = ("info", "low", "medium", "high", "critical")
 WINDOWS_BLIND_SPOTS = ("distributed_spraying", "low_and_slow_spraying")
+# Benign activity that is no attack: its technique is not scored (D43).
+WINDOWS_UNSCORED_COUNT = 5
 # The groups whose D41 shape is checked against the KB's thresholds.
 WINDOWS_SHAPED_GROUPS = (
     "spraying",
@@ -780,6 +782,7 @@ def windows_dataset_problems(text: str, kb: dict[str, Any]) -> list[str]:
     group_counts: Counter[str] = Counter()
     goal_counts: Counter[str] = Counter()
     shaped: dict[str, list[dict[str, str]]] = {name: [] for name in WINDOWS_SHAPED_GROUPS}
+    unscored = 0
     seen_events: set[str] = set()
     seen_statuses: set[str] = set()
     rows = [line for line in text.replace("\r\n", "\n").split("\n") if line.strip()]
@@ -802,7 +805,11 @@ def windows_dataset_problems(text: str, kb: dict[str, Any]) -> list[str]:
         )
         if group in shaped:
             shaped[group].append(fields)
-        if not isinstance(technique, str) or not _WIN_TECHNIQUE_RE.fullmatch(technique):
+        if technique is None:  # ordinary activity: no technique is scored
+            unscored += 1
+            if (row.get("label"), group, row.get("truth_pattern")) != ("benign", "single", None):
+                found.append("a null expected_technique is for ordinary benign activity only")
+        elif not isinstance(technique, str) or not _WIN_TECHNIQUE_RE.fullmatch(technique):
             found.append("missing expected_technique label")
         if severity not in WINDOWS_SEVERITIES:
             found.append("missing expected_min_severity label")
@@ -817,6 +824,8 @@ def windows_dataset_problems(text: str, kb: dict[str, Any]) -> list[str]:
         problems.append(f"group counts {dict(group_counts)} != {WINDOWS_GROUP_COUNTS}")
     if dict(goal_counts) != WINDOWS_GOAL_COUNTS:
         problems.append(f"goal counts {dict(goal_counts)} != {WINDOWS_GOAL_COUNTS}")
+    if unscored != WINDOWS_UNSCORED_COUNT:
+        problems.append(f"unscored samples {unscored} != {WINDOWS_UNSCORED_COUNT}")
     for event_id in sorted(set(kb["events"]) - seen_events):
         problems.append(f"no sample of event {event_id}")
     for status in sorted({code.upper() for code in kb["statuses"]} - seen_statuses):

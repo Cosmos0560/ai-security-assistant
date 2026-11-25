@@ -26,8 +26,13 @@ Definitions, all computed from the ACCEPTED outcome of each alert (status ``tria
 
 The Windows-auth set has its own document (``compute_windows_metrics``) with, besides the above:
 
-* **Triage accuracy** (D43): accepted, the technique equals ``expected_technique`` and the severity
-  is at least ``expected_min_severity``, as n of ALL alerts in the set.
+* **Triage accuracy** (D43): accepted, the technique matches ``expected_technique`` and the severity
+  is at least ``expected_min_severity``, as n of the SCORED alerts (those with an expected
+  technique). An expected parent technique also accepts its sub-techniques; an expected
+  sub-technique needs an exact match. Reported twice: over every scored alert, and again without
+  the labelled known misses (alerts whose pattern the facts cannot show).
+* **Benign activity**: the unscored alerts (no expected technique). How many were accepted, and how
+  many were accepted with a severity of at most ``low``, so over-escalation is visible.
 * **Validator rejections** (n of replied, validator ON) and **reason codes**: alerts per code,
   ``kb.*`` apart from the rest.
 * **Pattern agreement** and **known misses**: the D41 batch fact against ``truth_pattern``; a known
@@ -270,21 +275,71 @@ def compute_metrics(run: EvalRun) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- the Windows-auth set (D43)
 
-WINDOWS_METRICS_SCHEMA_VERSION: Final = "1"
+WINDOWS_METRICS_SCHEMA_VERSION: Final = "2"
 _SEVERITY_VALUES: Final = frozenset(severity.value for severity in Severity)
+# Ordinary activity triaged above this severity is over-escalated.
+BENIGN_MAX_SEVERITY: Final = Severity.LOW
+
+
+def technique_matches(expected: str, actual: str | None) -> bool:
+    """The expected technique, or one of its sub-techniques when ``expected`` is a parent."""
+    if actual is None:
+        return False
+    if actual == expected:
+        return True
+    parent = "." not in expected
+    return parent and re.fullmatch(re.escape(expected) + r"\.\d{3}", actual) is not None
+
+
+def _accepted_severity(outcome: AlertOutcome) -> Severity | None:
+    """The severity of an ACCEPTED verdict, or None (also when it is not a severity at all)."""
+    verdict = outcome.verdict
+    if outcome.status is not Status.TRIAGED or verdict is None:
+        return None
+    severity = verdict.severity
+    if severity is None or severity not in _SEVERITY_VALUES:
+        return None  # permissive reading
+    return Severity(severity)
 
 
 def triage_accurate(sample: WindowsSample, outcome: AlertOutcome) -> bool:
     """Accepted, the expected technique, and a severity at least the expected one (D43)."""
-    verdict = outcome.verdict
-    if outcome.status is not Status.TRIAGED or verdict is None:
+    if sample.expected_technique is None:
+        raise ValueError("a sample with no expected technique has no triage accuracy")
+    severity = _accepted_severity(outcome)
+    if severity is None or outcome.verdict is None:
         return False
-    if verdict.mitre_technique != sample.expected_technique:
+    if not technique_matches(sample.expected_technique, outcome.verdict.mitre_technique):
         return False
-    severity = verdict.severity
-    if severity is None or severity not in _SEVERITY_VALUES:
-        return False  # permissive reading: not a severity at all
-    return RANK[Severity(severity)] >= RANK[sample.expected_min_severity]
+    return RANK[severity] >= RANK[sample.expected_min_severity]
+
+
+def _accuracy(samples: Sequence[WindowsSample], run: ConfigRun, *, known: bool) -> dict[str, int]:
+    """Accurate of the scored alerts; ``known=False`` leaves the labelled known misses out."""
+    pairs = [
+        (sample, outcome)
+        for sample, outcome in zip(samples, run.outcomes, strict=True)
+        if sample.expected_technique is not None and (known or sample.known_miss is None)
+    ]
+    return count(pairs, lambda p: triage_accurate(*p)).to_json()
+
+
+def _benign_activity(samples: Sequence[WindowsSample], run: ConfigRun) -> dict[str, Any]:
+    """The unscored alerts: accepted, and accepted with a severity of at most ``low``."""
+    outcomes = [
+        outcome
+        for sample, outcome in zip(samples, run.outcomes, strict=True)
+        if sample.expected_technique is None
+    ]
+
+    def modest(outcome: AlertOutcome) -> bool:
+        severity = _accepted_severity(outcome)
+        return severity is not None and RANK[severity] <= RANK[BENIGN_MAX_SEVERITY]
+
+    return {
+        "accepted": count(outcomes, lambda o: o.status is Status.TRIAGED).to_json(),
+        "severity_at_most_low": count(outcomes, modest).to_json(),
+    }
 
 
 def validator_rejections(outcomes: Iterable[AlertOutcome]) -> Cell:
@@ -338,15 +393,18 @@ def compute_windows_metrics(run: EvalRun) -> dict[str, Any]:
     # run is the one under ``all`` that follows the system prompt (the well-behaved mock).
     runs = {"ablation": ablation, "operational": {"all": run.well_behaved_all}}
     accuracy: dict[str, Any] = {}
+    without_known: dict[str, Any] = {}
+    benign: dict[str, Any] = {}
     rejections: dict[str, Any] = {}
     reasons: dict[str, Any] = {}
     for name, by_config in runs.items():
         accuracy[name] = {
-            label: count(
-                list(zip(samples, r.outcomes, strict=True)), lambda p: triage_accurate(*p)
-            ).to_json()
-            for label, r in by_config.items()
+            label: _accuracy(samples, r, known=True) for label, r in by_config.items()
         }
+        without_known[name] = {
+            label: _accuracy(samples, r, known=False) for label, r in by_config.items()
+        }
+        benign[name] = {label: _benign_activity(samples, r) for label, r in by_config.items()}
         rejections[name] = {
             label: validator_rejections(r.outcomes).to_json()
             for label, r in by_config.items()
@@ -382,6 +440,8 @@ def compute_windows_metrics(run: EvalRun) -> dict[str, Any]:
             if any(s.attack_goal == goal for s in samples)
         },
         "triage_accuracy": accuracy,
+        "triage_accuracy_excluding_known_misses": without_known,
+        "benign_activity": benign,
         "validator_rejections": rejections,
         "reason_codes": reasons,
         "patterns": _pattern_metrics(samples),

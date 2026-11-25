@@ -47,6 +47,8 @@ def test_the_gate_lists_match_the_eval_package(gate: ModuleType) -> None:
     assert set(gate.WINDOWS_GOAL_COUNTS) <= set(dataset.WINDOWS_GOALS)
     assert tuple(s.value for s in Severity) == gate.WINDOWS_SEVERITIES
     assert gate.WINDOWS_BLIND_SPOTS == dataset.KNOWN_MISSES
+    unscored = [s for s in dataset.load_windows_dataset() if s.expected_technique is None]
+    assert len(unscored) == gate.WINDOWS_UNSCORED_COUNT
 
 
 def test_the_real_set_passes_and_the_check_runs(gate: ModuleType) -> None:
@@ -88,7 +90,9 @@ def set_record(group: str, key: str, value: object) -> Change:
             "event ID not in the KB",
         ),
         (set_row("single", "expected_technique", "brute"), "expected_technique label"),
-        (set_row("single", "expected_technique", None), "expected_technique label"),
+        (set_row("single", "expected_technique", "T1078"), "unscored samples 4 != 5"),
+        (set_row("spraying", "expected_technique", None), "ordinary benign activity only"),
+        (set_row("injection", "expected_technique", None), "ordinary benign activity only"),
         (set_row("single", "expected_min_severity", "bad"), "expected_min_severity label"),
         (set_row("spraying", "expected_technique", "T1110"), "differs from the KB technique"),
         (set_row("distributed_spraying", "known_miss", None), "known_miss"),

@@ -22,7 +22,9 @@ and has no split and no hard negatives. Its rows share ``sample_id``, ``label``,
 ``attack_goal``, ``goal_target`` and ``record``, and add:
 
 * ``group``                 which case the alert belongs to (``WINDOWS_GROUPS``);
-* ``expected_technique``    the ground-truth technique (every alert has one);
+* ``expected_technique``    the ground-truth technique, or null for ordinary activity that is no
+                            attack: its technique is not scored (the schema still makes the model
+                            name one);
 * ``expected_min_severity`` the lowest severity a correct triage may give;
 * ``truth_pattern``         what the failed logons REALLY are, or null when not assessed;
 * ``known_miss``            the documented D41 blind spot the alert sits in, or null.
@@ -30,6 +32,11 @@ and has no split and no hard negatives. Its rows share ``sample_id``, ``label``,
 There ``label`` keeps the main set's meaning: ``benign`` is "no injected instructions", so the
 alerts of a real spraying or brute-force group are ``benign`` too. ``attack_goal`` may also be
 ``fact_misstatement``, which only this set uses.
+
+Two known limits of the set, both kept on purpose: one injection sits in ``workstationName``, which
+the Wazuh adapter drops, so the model never sees that payload (it still counts as an injection and
+costs a call); and one Russian-locale 4625 is too long for the Ollama context budget, so the local
+model is never asked about it.
 
 Every record goes through the real ingest adapter, so the eval sees exactly what ``aisa triage``
 would. Any deviation is a ``DatasetError``; there is no partial dataset.
@@ -147,7 +154,7 @@ class WindowsSample(Sample):
     """A sample of the Windows-auth set, with its ground truth (D43)."""
 
     group: str
-    expected_technique: str
+    expected_technique: str | None
     expected_min_severity: Severity
     truth_pattern: str | None
     known_miss: str | None
@@ -255,9 +262,7 @@ def parse_windows_row(row: object, number: int) -> WindowsSample:
     category, goal, target = _attack_fields(row, WINDOWS_GOALS, label)
     if row["group"] not in WINDOWS_GROUPS:
         raise DatasetError(f"{label}: unknown group")
-    technique = row["expected_technique"]
-    if not isinstance(technique, str) or not technique:
-        raise DatasetError(f"{label}: expected_technique must be a non-empty string")
+    technique = _optional_str(row, "expected_technique", label)
     if row["expected_min_severity"] not in [s.value for s in Severity]:
         raise DatasetError(f"{label}: expected_min_severity must be a severity")
     truth = _optional_str(row, "truth_pattern", label)
@@ -266,6 +271,10 @@ def parse_windows_row(row: object, number: int) -> WindowsSample:
     miss = _optional_str(row, "known_miss", label)
     if miss is not None and (miss not in KNOWN_MISSES or truth is None):
         raise DatasetError(f"{label}: known_miss needs a known blind spot and a truth_pattern")
+    if technique is None and (row["label"] != "benign" or truth is not None):
+        raise DatasetError(
+            f"{label}: a null expected_technique needs a benign sample with no truth_pattern"
+        )
     return WindowsSample(
         sample_id=sample_id,
         label=row["label"],
