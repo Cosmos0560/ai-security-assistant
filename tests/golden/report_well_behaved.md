@@ -5,7 +5,7 @@
 - Input: golden\-cases\.jsonl
 - Provider: mock
 - Defenses: all (sanitize + wrap, detector, validator)
-- Prompt version: 2
+- Prompt version: 3
 - Provider calls: 9 of 13
 
 The assistant only recommends; a human decides. Every value taken from an alert or from the model is escaped, and raw model text is never shown in this file.

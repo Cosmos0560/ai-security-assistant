@@ -72,8 +72,10 @@ from ai_security_assistant.kb.patterns import batch_patterns
 from ai_security_assistant.pipeline import AcceptedVerdict, AlertOutcome, DefenseConfig, Status
 from ai_security_assistant.schema import Action, Severity
 from ai_security_assistant.triage import parse_triage
+from ai_security_assistant.validator import read_permissive
 from ai_security_assistant.validator.grounding import ungrounded
 from ai_security_assistant.validator.kb import scan as kb_scan
+from ai_security_assistant.validator.mitre import allowlist
 from ai_security_assistant.validator.severity import RANK
 
 METRICS_SCHEMA_VERSION: Final = "1"
@@ -507,6 +509,13 @@ def latency_summary(values: Sequence[int]) -> dict[str, int | None]:
     }
 
 
+def technique_allowlisted(outcomes: Iterable[AlertOutcome]) -> Cell:
+    """Replies naming an allowlisted technique, n of the alerts whose reply came back. Counted
+    from the reply itself, so it is known with the validator off too."""
+    replied = [o.raw_text for o in outcomes if o.raw_text is not None]
+    return count(replied, lambda text: read_permissive(text).mitre_technique in allowlist())
+
+
 def live_metrics(result: LiveResult, *, windows: bool) -> dict[str, Any]:
     """The metrics of a live run, partial or complete, and what only a live run measures.
 
@@ -538,6 +547,9 @@ def live_metrics(result: LiveResult, *, windows: bool) -> dict[str, Any]:
         },
         "provider_errors": counted(KIND_PROVIDER_ERROR),
         "refused_context_budget": counted(KIND_REFUSED),
+        "technique_allowlisted": {
+            r.config.label: technique_allowlisted(r.outcomes).to_json() for r in run.naive
+        },
         "latency_ms": {x: latency_summary(result.latencies(x)) for x in labels},
         "latency_ms_all_calls": latency_summary(result.latencies()),
         "reuse": result.reuse,

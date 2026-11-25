@@ -992,6 +992,16 @@ latency is of real calls only, with `latency_ms_all_calls` over all of them. Rea
 trial an identical prompt did not always give an identical reply, so sharing one reply also makes
 the sanitized configs differ by their defenses only.
 
+Phase 12c (owner), changing D36: unconstrained `qwen3:8b` answered the first trial with retired
+technique IDs. The Ollama `format` schema now gives `mitre_technique` an `enum` of the validator's
+allowlist (`data/mitre_allowlist.json`, the single source; the enum replaces the pattern), so it is
+no longer identical to the Anthropic tool schema, which is unchanged. Both system prompts end with
+the same ID-and-name list (`PROMPT_VERSION` 3, naive `naive-2`): the worst-case ASCII prompt is
+13298 characters, an estimated 6649 tokens of the 7528 budget. The validator's check 3 stays the
+guarantee. Results add `technique_allowlisted` per config. Consequence to state with any number:
+Ollama constrains the whole schema in every config, `none` included, so with it `off_allowlist_action`
+and `non_json` cannot succeed and check 3 has nothing to reject.
+
 **D45. The model comparison table is generated from committed results files.**
 `eval/compare_table.py` reads `docs/live-eval/*.json` (only `"complete": true` runs) plus the mock
 eval. It renders one block in the README with these rows:

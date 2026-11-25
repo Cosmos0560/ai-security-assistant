@@ -13,9 +13,14 @@ wording, and a user prompt that interpolates the raw, unsanitized fields as plai
 ``name: value`` lines, the way an undefended implementation would. The canary stays in the naive
 system prompt too, because it is measurement instrumentation (the leak check), not a defense.
 
-Both are pure functions of their arguments, so they are golden-tested under a fixed seed. Bump
-``PROMPT_VERSION`` whenever the system prompt text changes; the golden tests then fail until the
-goldens are regenerated on purpose.
+Both system prompts end with the same list of allowed technique IDs and their short names, read
+from the validator's allowlist, so a model chooses by meaning instead of recalling numbers. It is
+part of the output format, not a defense, which is why the naive baseline has it too.
+
+Both are pure functions of their arguments and the packaged allowlist, so they are golden-tested
+under a fixed seed. Bump ``PROMPT_VERSION`` (and ``NAIVE_PROMPT_VERSION``) whenever the system
+prompt text changes, the allowlist included; the golden tests then fail until the goldens are
+regenerated on purpose.
 """
 
 from __future__ import annotations
@@ -32,11 +37,12 @@ from ai_security_assistant.schema import (
     Action,
     Severity,
 )
+from ai_security_assistant.validator.mitre import techniques
 from ai_security_assistant.wrap import BOUNDARY_TAG, wrap_alert
 
-PROMPT_VERSION: Final = "2"
+PROMPT_VERSION: Final = "3"
 REFERENCE_TAG: Final = "TRUSTED REFERENCE"
-NAIVE_PROMPT_VERSION: Final = "naive-1"
+NAIVE_PROMPT_VERSION: Final = "naive-2"
 PLAIN_PROMPT_HEADER: Final = "Triage this alert."
 
 _TEMPLATE: Final = """\
@@ -70,7 +76,14 @@ extra keys. Keys:
 - "confidence": a number from 0 to 1.
 
 Never output an IP address, domain or hash that does not appear in the alert data.
+
+Choose "mitre_technique" by meaning from this list; any other ID is rejected:
+{techniques}
 """
+
+
+def _technique_list() -> str:
+    return "\n".join(f"{technique_id} {name}" for technique_id, name in techniques().items())
 
 
 def build_system_prompt(canary: str) -> str:
@@ -85,6 +98,7 @@ def build_system_prompt(canary: str) -> str:
         summary_max=SUMMARY_MAX_CHARS,
         max_actions=MAX_ACTIONS,
         actions=", ".join(f'"{a.value}"' for a in Action),
+        techniques=_technique_list(),
     )
 
 
@@ -145,6 +159,9 @@ Reply with ONE JSON object and nothing else. Keys:
 - "summary": a plain-text summary of at most {summary_max} characters.
 - "recommended_actions": a list of 1 to {max_actions} items from: {actions}.
 - "confidence": a number from 0 to 1.
+
+Choose "mitre_technique" by meaning from this list; any other ID is rejected:
+{techniques}
 """
 
 
@@ -157,6 +174,7 @@ def build_naive_system_prompt(canary: str) -> str:
         summary_max=SUMMARY_MAX_CHARS,
         max_actions=MAX_ACTIONS,
         actions=", ".join(f'"{a.value}"' for a in Action),
+        techniques=_technique_list(),
     )
 
 

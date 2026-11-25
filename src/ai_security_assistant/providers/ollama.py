@@ -21,11 +21,12 @@ silently become a 10-minute one. A timeout or an HTTP error is a ``ProviderError
 to ``provider_error``).
 
 The request asks for ``think: false``, ``stream: false`` and ``format`` equal to the schema of the
-Anthropic tool call, so the two providers cannot drift. That only narrows what the model emits. The
-guarantee stays ``triage.py``'s strict parse plus the validator: a ``<think>`` block or prose in the
-content is a parse failure there, and a reply cut off at the token cap (``done_reason: "length"``)
-is refused here as ``MalformedReply("truncated")``. Error messages are fixed phrases and never carry
-reply text.
+Anthropic tool call, so the two providers cannot drift, except that ``mitre_technique`` is also an
+enum of the validator's MITRE allowlist (``validator/mitre.py``, the single source). That only
+narrows what the model emits. The guarantee stays ``triage.py``'s strict parse plus the validator:
+a ``<think>`` block or prose in the content is a parse failure there, and a reply cut off at the
+token cap (``done_reason: "length"``) is refused here as ``MalformedReply("truncated")``. Error
+messages are fixed phrases and never carry reply text.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from ai_security_assistant.providers.base import (
     ProviderError,
 )
 from ai_security_assistant.schema import tool_input_schema
+from ai_security_assistant.validator.mitre import allowlist
 
 ENV_BASE_URL: Final = "OLLAMA_BASE_URL"
 ENV_MODEL: Final = "OLLAMA_MODEL"
@@ -217,7 +219,8 @@ class OllamaProvider:
     # ------------------------------------------------------------------ the call
 
     def request_body(self, system: str, user: str) -> dict[str, Any]:
-        """The ``/api/chat`` request document. ``format`` is the Anthropic tool's input schema."""
+        """The ``/api/chat`` request document. ``format`` is the Anthropic tool's input schema
+        with the technique limited to the allowlist."""
         return {
             "model": self._model,
             "messages": [
@@ -226,7 +229,7 @@ class OllamaProvider:
             ],
             "stream": False,
             "think": False,
-            "format": tool_input_schema(),
+            "format": tool_input_schema(allowlist()),
             "options": {
                 "temperature": 0,
                 "seed": SEED,

@@ -169,7 +169,7 @@ def test_the_runner_keeps_dataset_order_and_one_run_per_config() -> None:
         assert [o.alert for o in config_run.outcomes] == [s.alert for s in samples]
     assert run.well_behaved_all.config is DefenseConfig.ALL
     assert run.well_behaved_all.provider == "mock"
-    assert run.naive_run(DefenseConfig.NONE).prompt_version == "naive-1"
+    assert run.naive_run(DefenseConfig.NONE).prompt_version == NAIVE_PROMPT_VERSION
 
 
 # ---------------------------------------------------------------- the README block (D25)

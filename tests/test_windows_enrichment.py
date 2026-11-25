@@ -228,10 +228,10 @@ def test_without_facts_the_user_prompt_is_only_the_data_block() -> None:
     assert user.startswith("<<<AISA-UNTRUSTED-DATA") and user.endswith("END>>>")
 
 
-def test_the_system_prompt_gains_the_reference_rule_and_version_2() -> None:
-    assert PROMPT_VERSION == "2"
+def test_the_system_prompt_gains_the_reference_rule_and_a_version() -> None:
+    assert PROMPT_VERSION == "3"
     system = build_system_prompt(new_canary("p9"))
-    assert "version 2." in system
+    assert "version 3." in system
     rule = system[system.index("4. The user message") :].split("\n\n")[0]
     assert REFERENCE_TAG in rule and "authoritative" in rule
     assert "does not list" in rule and "must match it" in rule
@@ -471,6 +471,9 @@ def test_the_worst_case_ascii_prompt_with_the_largest_reference_fits_the_budget(
     system = build_system_prompt(new_canary("p9"))
     user = build_user_prompt(sanitized, new_nonce("p9"), largest_reference())
     tokens = ollama.estimate_prompt_tokens(system, user)
+    assert "T1110 Brute Force" in system.split(
+        chr(10)
+    )  # the technique list is part of what must fit
     assert tokens <= ollama.PROMPT_TOKEN_BUDGET
     assert tokens + ollama.NUM_PREDICT + ollama.CHAT_OVERHEAD_TOKENS <= ollama.NUM_CTX
     ollama.check_prompt_fits(system, user)  # does not raise

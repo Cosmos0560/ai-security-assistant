@@ -40,6 +40,7 @@ from ai_security_assistant.providers.ollama import (
 )
 from ai_security_assistant.schema import tool_input_schema
 from ai_security_assistant.triage import TriageStatus, triage_alert
+from ai_security_assistant.validator.mitre import allowlist
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ollama"
 
@@ -233,7 +234,7 @@ def test_the_request_asks_for_structured_unstreamed_deterministic_output() -> No
     body = transport.body()
     assert body["think"] is False
     assert body["stream"] is False
-    assert body["format"] == tool_input_schema()
+    assert body["format"] == tool_input_schema(allowlist())
     assert body["options"] == {
         "temperature": 0,
         "seed": SEED,

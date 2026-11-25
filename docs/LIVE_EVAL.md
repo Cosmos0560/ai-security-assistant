@@ -49,7 +49,8 @@ The two full runs, the shorter one first:
 | Windows | about 2 hours | about 2.7 hours |
 | Main | about 4.5 hours | about 6.5 hours |
 
-These come from one trial on the owner's CPU laptop (2026-11-25, two Windows-set alerts, 8 calls):
+**These estimates predate the technique list**, which makes every prompt about 1,600 characters
+longer; expect more, and trust the eval's own ETA. They come from one trial on the owner's CPU laptop (2026-11-25, two Windows-set alerts, 8 calls):
 46 to 90 seconds for a prompt Ollama had not just seen, about 30 seconds for an immediate repeat,
 which Ollama's own prompt cache makes cheaper. So reuse saves about 30%, not half. No main-set
 alert was measured. After the first calls the eval prints an estimate from your own machine, for
@@ -108,6 +109,36 @@ Russian-locale alert (w041) is refused by the context guard in `detector-only`, 
 and `all`, whose prompts escape Cyrillic; only `none` sends it. The blind-spot alerts are labelled
 with what really happened, so under the validator they cannot score as accurate: accuracy is
 reported with and without them.
+
+**Technique IDs.** In the first trial (2026-11-25), unconstrained `qwen3:8b` answered with retired
+IDs for both alerts (`T1026`, `T1206`), so the validator rejected both and accuracy would have
+been close to zero. The request now limits `mitre_technique` to an enum of the validator's allowlist
+(`data/mitre_allowlist.json`), and both system prompts list those IDs with their names. The
+validator's check stays. Before a long run, check on a pilot that the figure
+`live.technique_allowlisted` is full (`n` equals `of`); if it is not, Ollama is not enforcing the
+schema.
+
+What the format constraint means for the numbers: Ollama constrains decoding to the whole schema,
+in all four configurations, `none` included. So with `qwen3:8b` a technique outside the allowlist,
+an action outside the action list, an unknown severity or a non-JSON reply should not occur at all:
+the `off_allowlist_action` and `non_json` attack goals cannot succeed, and the validator's allowlist
+check has nothing to reject. Say so wherever these numbers are compared with a model that is not
+constrained.
+
+**Pilot before the long run** (10 calls, Windows set, `none` only):
+
+```bash
+.venv/Scripts/aisa eval --provider ollama --dataset windows --configs none --limit 10 --out reports/pilot-enum.json
+```
+
+```bash
+.venv/Scripts/python -c "import json; m = json.load(open('reports/pilot-enum.json')); print(m['complete'], m['live']['technique_allowlisted']['none'], m['triage_accuracy']['ablation']['none'], m['triage_accuracy_excluding_known_misses']['ablation']['none'])"
+```
+
+That prints whether the run is complete, the allowlisted replies (`n` of `of`) and the triage
+accuracy (`n` of the 9 scored alerts of the 10; the second figure leaves out known misses, of which
+this slice has none). `none` is the undefended baseline: it has no validator and no trusted
+reference facts, so its accuracy is not the accuracy of the defended configurations.
 
 ## What a live eval does
 
@@ -204,6 +235,12 @@ Run the single live test first. It makes one call and costs a fraction of a cent
 
 ```bash
 AISA_LIVE=1 .venv/Scripts/python -m pytest -m live tests/live
+```
+
+For the local model, one call that proves Ollama enforces the technique enum:
+
+```bash
+AISA_LIVE=1 .venv/Scripts/python -m pytest -m live tests/live/test_ollama_live.py -k enum
 ```
 
 The request follows Anthropic's current API reference for Claude Haiku 5.5 (no sampling

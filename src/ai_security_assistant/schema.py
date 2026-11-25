@@ -6,12 +6,15 @@ exists, whether an IOC is grounded in the input and whether the canary leaked ar
 the schema only fixes shape and size.
 
 ``tool_input_schema()`` is the JSON Schema that the Anthropic provider sends as the forced tool's
-``input_schema``. It is derived from the model, so the two cannot drift.
+``input_schema``. It is derived from the model, so the two cannot drift. The Ollama provider sends
+the same schema with the technique narrowed to an enum of IDs, because Ollama constrains decoding
+to its ``format`` schema and a small local model otherwise invents technique IDs.
 """
 
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterable
 from enum import StrEnum
 from typing import Any, Final
 
@@ -66,9 +69,15 @@ def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
     return node
 
 
-def tool_input_schema() -> dict[str, Any]:
-    """A self-contained JSON Schema (no ``$ref``) for the five-key object."""
+def tool_input_schema(technique_ids: Iterable[str] | None = None) -> dict[str, Any]:
+    """A self-contained JSON Schema (no ``$ref``) for the five-key object.
+
+    With ``technique_ids``, ``mitre_technique`` is an enum of them, sorted. The enum replaces the
+    shape pattern: it is stricter, and a grammar builder needs one constraint, not two.
+    """
     raw = TriageOutput.model_json_schema()
     schema = _inline_refs(raw, raw.get("$defs", {}))
     assert isinstance(schema, dict)
+    if technique_ids is not None:
+        schema["properties"]["mitre_technique"] = {"type": "string", "enum": sorted(technique_ids)}
     return schema

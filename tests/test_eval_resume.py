@@ -134,6 +134,9 @@ def test_a_complete_run_writes_results_and_a_checkpoint(
     metrics = read(out)
     assert metrics["complete"] is True
     section = metrics["live"]
+    # The mock's technique table is inside the allowlist, so every reply counts.
+    listed = section["technique_allowlisted"]
+    assert sorted(listed) == sorted(LABELS) and all(c["n"] == c["of"] > 0 for c in listed.values())
     assert section["provider"] == "ollama" and section["model"] == ollama.DEFAULT_MODEL
     assert section["dataset"] == "windows" and section["limit"] == 6
     assert section["date"] == "2026-11-25" and section["configs"] == LABELS
