@@ -9,6 +9,10 @@ decision, a hash of the prompt that was sent and the latency. A later line for t
 replaces an earlier one (a retried error). The runner rebuilds every outcome by replaying the
 stored reply through the pipeline, so nothing derived from a reply is trusted from the file.
 
+With reply reuse a pair whose prompt was already answered stores no text of its own: its line is
+marked ``reused`` and points, by the prompt hash, to the ONE line that holds the reply. Whether
+reuse is on is pinned in the header, so sittings cannot mix the two.
+
 A process killed in the middle of a write leaves an unfinished last line; it is cut off and that
 pair runs again. Any other damage refuses to start.
 
@@ -25,7 +29,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Final
 
-CHECKPOINT_VERSION: Final = "1"
+CHECKPOINT_VERSION: Final = "2"
 CHECKPOINT_SUFFIX: Final = ".checkpoint.jsonl"
 PINNED_FIELDS: Final = (
     "checkpoint_version",
@@ -40,6 +44,7 @@ PINNED_FIELDS: Final = (
     "subset",
     "limit",
     "configs",
+    "reuse",
 )
 STARTED: Final = "started"
 
@@ -50,6 +55,8 @@ KIND_PROVIDER_ERROR: Final = "provider_error"  # timeout or HTTP error: retried 
 KIND_REFUSED: Final = "refused_context_budget"  # no request made; final
 KIND_NOT_CALLED: Final = "not_called"  # the detector blocked the alert
 KINDS: Final = (KIND_REPLY, KIND_MALFORMED, KIND_PROVIDER_ERROR, KIND_REFUSED, KIND_NOT_CALLED)
+# The kinds that mean a request was sent (unless the line is a reuse of an earlier one).
+REQUEST_KINDS: Final = (KIND_REPLY, KIND_MALFORMED, KIND_PROVIDER_ERROR)
 
 
 class CheckpointError(ValueError):
@@ -70,6 +77,13 @@ class Record:
     prompt_sha256: str | None  # None when nothing was sent
     latency_ms: int | None
     raw_text: str | None = field(default=None, repr=False)  # untrusted model text
+    # No request of its own: the result of the same prompt, whose text another line holds.
+    reused: bool = False
+
+    @property
+    def requested(self) -> bool:
+        """Whether this line stands for a request that was really sent."""
+        return not self.reused and self.kind in REQUEST_KINDS
 
     @property
     def key(self) -> Key:
@@ -105,9 +119,17 @@ def _record(row: object) -> Record | None:
         and _optional(row["prompt_sha256"], str)
         and _optional(row["latency_ms"], int)
         and _optional(row["raw_text"], str)
-        and (row["kind"] == KIND_REPLY) is (row["raw_text"] is not None)
-        and (row["kind"] == KIND_MALFORMED) is (row["reason"] is not None)
+        and type(row["reused"]) is bool
     )
+    if not good:
+        return None
+    if row["reused"]:  # a pointer: no text, no reason and no latency of its own
+        own = (row["raw_text"], row["reason"], row["latency_ms"])
+        good = row["kind"] in REQUEST_KINDS and own == (None, None, None)
+    else:
+        good = (row["kind"] == KIND_REPLY) is (row["raw_text"] is not None) and (
+            row["kind"] == KIND_MALFORMED
+        ) is (row["reason"] is not None)
     return Record(**{**row, "reasons": tuple(reasons)}) if good else None
 
 
@@ -142,10 +164,14 @@ def _append(path: Path, line: str) -> None:
 class Checkpoint:
     """An open checkpoint: the latest record of every pair, and ``append``."""
 
-    def __init__(self, path: Path, started: str, records: dict[Key, Record]) -> None:
+    def __init__(
+        self, path: Path, started: str, records: dict[Key, Record], calls_made: int = 0
+    ) -> None:
         self.path = path
         self.started = started
         self.records = records
+        # Every request any line stands for, the ones a retry has since replaced included.
+        self.calls_made = calls_made
 
     @classmethod
     def open(cls, path: Path, pinned: Mapping[str, object], started: str) -> Checkpoint:
@@ -172,15 +198,18 @@ class Checkpoint:
                 "the checkpoint belongs to another run; it differs in " + ", ".join(differs)
             )
         records: dict[Key, Record] = {}
+        calls_made = 0
         for number, line in enumerate(lines[1:], start=2):
             record = _record(_loads(line))
             if record is None:
                 raise CheckpointError(f"checkpoint line {number} is damaged")
             records[record.key] = record
+            calls_made += record.requested
         if end < len(data):
             os.truncate(path, end)
-        return cls(path, header_row[STARTED], records)
+        return cls(path, header_row[STARTED], records, calls_made)
 
     def append(self, record: Record) -> None:
         _append(self.path, record.to_json())
         self.records[record.key] = record
+        self.calls_made += record.requested

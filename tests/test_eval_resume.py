@@ -33,7 +33,12 @@ from ai_security_assistant.eval.runner import (
 from ai_security_assistant.kb.patterns import batch_patterns
 from ai_security_assistant.pipeline import DefenseConfig, run_pipeline
 from ai_security_assistant.providers import ollama
-from ai_security_assistant.providers.base import CallBudget, ContextBudgetExceeded, ProviderError
+from ai_security_assistant.providers.base import (
+    CallBudget,
+    ContextBudgetExceeded,
+    MalformedReply,
+    ProviderError,
+)
 from ai_security_assistant.providers.mock import NaiveMock
 from ai_security_assistant.triage import TriageStatus, triage_alert
 from ai_security_assistant.validator import validate
@@ -140,12 +145,15 @@ def test_a_complete_run_writes_results_and_a_checkpoint(
     assert [(r["config"], r["sample_id"]) for r in records[:4]] == [
         (label, records[0]["sample_id"]) for label in LABELS
     ]  # one alert through every config, then the next
-    assert len(records) == 24 and sum(r["kind"] == "reply" for r in records) == len(fake.chats)
+    asked = len(fake.chats)
+    assert len(records) == 24 and sum(r["raw_text"] is not None for r in records) == asked == 12
     printed = capsys.readouterr()
-    assert "of 24 calls" in printed.out and "incomplete" not in printed.out
-    assert "6 alerts x 4 configs = 24 pairs; 0 in the checkpoint; 24 to run" in printed.err
-    assert re.search(r"\[24/24\] all w\d{3}: \w+ in \d+s; no model calls left", printed.err)
-    assert re.search(r"\[1/24\] .*; 23 model calls left, ETA about \d", printed.err)
+    assert f"used {asked} of 24 calls" in printed.out and "incomplete" not in printed.out
+    assert "12 pairs reused the reply of an identical prompt" in printed.out
+    assert "24 pairs; 0 in the checkpoint; 24 to run; 12 model calls left" in printed.err
+    assert re.search(r"\[2/24\] detector-only w\d{3}: \w+ in \d+s; 10 model calls", printed.err)
+    assert re.search(r"\[24/24\] all w\d{3}: \w+ \(reused\); no model calls left", printed.err)
+    assert re.search(r"\[1/24\] .*; 11 model calls left, ETA about \d", printed.err)
     assert "ETA unknown until one is measured" in printed.err
 
 
@@ -232,14 +240,14 @@ def test_a_run_that_crashes_resumes_to_the_same_results(
 
 def test_an_unfinished_last_line_is_cut_off_and_run_again(fake: FakeOllama, tmp_path: Path) -> None:
     out = tmp_path / "q.json"
-    assert cli.main(live(out, *SMALL)) == 0
+    assert cli.main(live(out, *SMALL, "--no-reuse")) == 0  # the last pair has its own call
     whole = ckpt(out).read_bytes()
     metrics = read(out)
     out.unlink()
     cli.samples_path(out).unlink()
     ckpt(out).write_bytes(whole[:-30])  # killed in the middle of the last write
     asked = len(fake.chats)
-    assert cli.main(live(out, *SMALL)) == 0
+    assert cli.main(live(out, *SMALL, "--no-reuse")) == 0
     assert len(fake.chats) == asked + 1
     assert read(out) == metrics and ckpt(out).read_bytes() == whole
 
@@ -327,10 +335,14 @@ def test_an_error_is_recorded_the_run_continues_and_only_the_flag_retries(
     assert len(fake.chats) == asked
     assert f"{errored} of them errored; 0 to run" in capsys.readouterr().err
 
+    sent_and_failed = [r for r in lines(ckpt(out))[1:] if r["kind"] == "provider_error"]
+    assert sum(not r["reused"] for r in sent_and_failed) == 2  # the naive and the sanitized
     assert cli.main(live(out, *SMALL, "--retry-errors")) == 0
-    assert len(fake.chats) == asked + errored
+    assert len(fake.chats) == asked + 2
     done = read(out)
     assert done["complete"] is True and done["live"]["pairs"]["errored"] == 0
+    # Every request that was sent is counted, the two failed ones too.
+    assert done["live"]["calls_made"] == len(fake.chats) + 2
     assert len(lines(ckpt(out))) == 1 + 24 + errored  # appended, never rewritten
 
 
@@ -606,6 +618,7 @@ def test_a_checkpoint_that_cannot_be_read_is_an_input_error(
         ["--configs", "all"],
         ["--checkpoint", "a.checkpoint.jsonl"],
         ["--retry-errors"],
+        ["--no-reuse"],
     ],
 )
 def test_the_live_flags_do_not_apply_to_the_mock(
@@ -742,7 +755,7 @@ def test_the_latency_summary() -> None:
 
 def test_latency_comes_from_the_injected_clock(fake: FakeOllama, tmp_path: Path) -> None:
     out = tmp_path / "q.json"
-    assert cli.main(live(out, *SMALL)) == 0
+    assert cli.main(live(out, *SMALL, "--no-reuse")) == 0
     measured = read(out)["live"]["latency_ms"]
     for label in LABELS:
         values = [
@@ -773,3 +786,253 @@ def test_the_eta_uses_each_configs_own_mean_and_else_the_overall_one() -> None:
     assert _eta(["none", "all", "all"], records).endswith("ETA about 1m10s")
     assert _eta(["detector-only"], records).endswith("ETA about 20s")  # overall mean
     assert _eta([], records) == "no model calls left"
+
+
+# ---------------------------------------------------------------- reply reuse
+
+
+def documents(out: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    return read(out), read(cli.samples_path(out))
+
+
+# What may differ between a run with and without reuse: the calls and their timing only.
+CALL_FIELDS = (
+    "latency_ms",
+    "latency_ms_all_calls",
+    "reuse",
+    "calls_made",
+    "distinct_prompts",
+    "replies_reused",
+)
+
+
+def judged(document: dict[str, Any]) -> dict[str, Any]:
+    """A metrics document without anything about calls: what the model's replies led to."""
+    live_section = {k: v for k, v in document["live"].items() if k not in CALL_FIELDS}
+    return {**document, "live": live_section}
+
+
+def test_reuse_gives_the_same_verdicts_with_half_the_calls(
+    fake: FakeOllama, tmp_path: Path
+) -> None:
+    results = {}
+    asked = {}
+    for name, extra in (("with", ()), ("without", ("--no-reuse",))):
+        fake.chats.clear()
+        out = tmp_path / name / "q.json"
+        out.parent.mkdir()
+        assert cli.main(live(out, "--dataset", "windows", "--limit", "20", *extra)) == 0
+        results[name] = documents(out)
+        asked[name] = list(fake.chats)
+    (with_metrics, with_rows), (without_metrics, without_rows) = results.values()
+    assert judged(with_metrics) == judged(without_metrics)
+    assert with_rows == without_rows  # status, reason codes and goals, pair by pair
+    # Each distinct prompt once, and no prompt that a run without reuse would not send.
+    assert len(asked["with"]) == len(set(asked["with"])) == len(set(asked["without"]))
+    assert set(asked["with"]) == set(asked["without"])
+    assert len(asked["with"]) == 40 and len(asked["without"]) > 75  # naive + sanitized
+    section = with_metrics["live"]
+    assert section["reuse"] is True
+    assert section["calls_made"] == section["distinct_prompts"] == len(asked["with"])
+    assert section["replies_reused"] == len(asked["without"]) - len(asked["with"])
+    plain = without_metrics["live"]
+    assert plain["reuse"] is False and plain["replies_reused"] == 0
+    assert plain["calls_made"] == len(asked["without"])
+    assert plain["distinct_prompts"] == section["distinct_prompts"]
+
+
+def test_the_verdicts_themselves_are_the_same(tmp_path: Path) -> None:
+    samples = select_samples(load_windows_dataset(), limit=12)
+    runs = {}
+    for reuse in (True, False):
+        book = cp.Checkpoint.open(
+            tmp_path / f"{reuse}.checkpoint.jsonl", dict.fromkeys(cp.PINNED_FIELDS, "x"), "now"
+        )
+        provider = Prompts()
+        runs[reuse] = run_live(
+            samples, load_windows_dataset(), list(DefenseConfig), provider, book, reuse=reuse
+        )
+    assert len(runs[True].outcomes) == 48
+    for key, outcome in runs[True].outcomes.items():
+        other = runs[False].outcomes[key]
+        assert (outcome.status, outcome.verdict, outcome.reasons) == (
+            other.status,
+            other.verdict,
+            other.reasons,
+        ), key
+        assert outcome.detector == other.detector and outcome.facts == other.facts
+
+
+def test_latency_is_measured_on_real_calls_only(fake: FakeOllama, tmp_path: Path) -> None:
+    out = tmp_path / "q.json"
+    assert cli.main(live(out, *SMALL)) == 0
+    section = read(out)["live"]
+    records = lines(ckpt(out))[1:]
+    assert all(r["latency_ms"] is None for r in records if r["reused"])
+    real = [r["latency_ms"] for r in records if r["latency_ms"] is not None]
+    assert len(real) == len(fake.chats) == section["latency_ms_all_calls"]["n"]
+    assert section["latency_ms_all_calls"] == latency_summary(real)
+    assert section["latency_ms"]["none"]["n"] == section["latency_ms"]["detector-only"]["n"] == 6
+    for label in ("validator-only", "all"):
+        assert section["latency_ms"][label] == latency_summary([])
+
+
+def test_a_reused_reply_is_stored_once(fake: FakeOllama, tmp_path: Path) -> None:
+    out = tmp_path / "q.json"
+    assert cli.main(live(out, *SMALL)) == 0
+    records = lines(ckpt(out))[1:]
+    stored = [r["prompt_sha256"] for r in records if r["raw_text"] is not None]
+    assert len(stored) == len(set(stored)) == len(fake.chats)
+    reused = [r for r in records if r["reused"]]
+    assert reused and all(r["raw_text"] is None and r["reason"] is None for r in reused)
+    assert {r["prompt_sha256"] for r in reused} <= set(stored)
+    assert {r["config"] for r in reused} == {"validator-only", "all"}
+    assert lines(ckpt(out))[0]["reuse"] is True
+
+
+@pytest.mark.parametrize("finished", [1, 2, 3, 4, 7])
+def test_a_resume_with_reuse_asks_nothing_twice(
+    finished: int, fake: FakeOllama, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = uninterrupted(fake, tmp_path)
+    whole = lines(ckpt(tmp_path / "whole" / "q.json"))
+    fake.chats.clear()
+    out = tmp_path / "q.json"
+    seen: list[str] = []
+
+    def crash(line: str) -> None:
+        seen.append(line)
+        if len(seen) == finished + 1:  # the first line is the plan
+            raise RuntimeError("stopped here")
+
+    monkeypatch.setattr(cli, "_progress", crash)
+    assert cli.main(live(out, *SMALL)) == 1
+    assert len(lines(ckpt(out))) == finished + 1
+    monkeypatch.setattr(cli, "_progress", lambda _line: None)
+    assert cli.main(live(out, *SMALL)) == 0
+    assert documents(out) == expected
+    assert len(fake.chats) == len(set(fake.chats)) == 12
+    assert lines(ckpt(out)) == whole
+
+
+def test_the_call_budget_still_lets_reuses_follow_the_last_call(
+    fake: FakeOllama, tmp_path: Path
+) -> None:
+    out = tmp_path / "q.json"
+    assert cli.main(live(out, *SMALL, "--max-calls", "2")) == 3
+    assert len(fake.chats) == 2 and len(lines(ckpt(out))) == 1 + 4  # one whole alert
+    assert cli.main(live(out, *SMALL)) == 0
+    assert len(fake.chats) == 12
+
+
+def test_a_shared_error_is_asked_once_and_retried_once(fake: FakeOllama, tmp_path: Path) -> None:
+    first = select_samples(load_windows_dataset(), limit=1)[0]
+    assert first.alert.target_user
+    failed: list[str] = []
+
+    def fail(_system: str, user: str) -> BaseException | None:
+        if "<<<" in user and first.alert.target_user in user:  # the sanitized prompt only
+            failed.append(user)
+            return TimeoutError()
+        return None
+
+    fake.fail = fail
+    out = tmp_path / "q.json"
+    args = live(out, "--dataset", "windows", "--limit", "1")
+    assert cli.main(args) == 3
+    assert len(failed) == 1 and read(out)["live"]["pairs"]["errored"] == 3
+    assert read(out)["live"]["calls_made"] == 2 and read(out)["live"]["replies_reused"] == 0
+    assert cli.main(args) == 3  # kept: not retried without the flag
+    assert len(failed) == 1
+    assert cli.main([*args, "--retry-errors"]) == 3  # fails again: one more request, shared
+    assert len(failed) == 2 and read(out)["live"]["calls_made"] == 3
+    fake.fail = never
+    assert cli.main([*args, "--retry-errors"]) == 0
+    section = read(out)["live"]
+    assert section["calls_made"] == 4 and section["replies_reused"] == 2
+    assert len(fake.chats) == 2  # the naive prompt and, at last, the sanitized one
+
+
+def test_a_resumed_pair_takes_the_recorded_error_of_its_prompt(
+    fake: FakeOllama, tmp_path: Path
+) -> None:
+    """Stopped between the failed call and the configurations that share its prompt: they get
+    the same recorded error, and the prompt is not asked again without the flag."""
+    fake.fail = lambda _system, user: TimeoutError() if "<<<" in user else None
+    out = tmp_path / "q.json"
+    args = live(out, "--dataset", "windows", "--limit", "1")
+    assert cli.main([*args, "--max-calls", "2"]) == 3
+    whole = ckpt(out).read_bytes().split(b"\n")
+    ckpt(out).write_bytes(b"\n".join(whole[:3]) + b"\n")  # header, none, detector-only
+    out.unlink()
+    cli.samples_path(out).unlink()
+    fake.fail = never
+    assert cli.main(args) == 3
+    assert len(fake.chats) == 1 and read(out)["live"]["pairs"]["errored"] == 3
+    assert cli.main([*args, "--retry-errors"]) == 0
+    assert len(fake.chats) == 2
+
+
+def test_a_truncated_reply_is_reused_too(tmp_path: Path) -> None:
+    class Truncates:
+        name = "truncates"
+        calls = 0
+
+        def complete(self, system: str, user: str) -> str:
+            self.calls += 1
+            raise MalformedReply("truncated")
+
+    book = cp.Checkpoint.open(
+        tmp_path / "a.checkpoint.jsonl", dict.fromkeys(cp.PINNED_FIELDS, "x"), "now"
+    )
+    provider = Truncates()
+    samples = select_samples(load_windows_dataset(), limit=1)
+    result = run_live(
+        samples, load_windows_dataset(), list(DefenseConfig), provider, book, reuse=True
+    )
+    assert provider.calls == 2 and result.replies_reused == 2 and result.complete
+    again = run_live(
+        samples, load_windows_dataset(), list(DefenseConfig), provider, book, reuse=True
+    )
+    assert provider.calls == 2 and again.outcomes == result.outcomes
+
+
+def test_reuse_cannot_be_switched_between_sittings(
+    fake: FakeOllama, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = stopped(fake, tmp_path)
+    message = refused(fake, capsys, live(out, *SMALL, "--no-reuse"))
+    assert "reuse (checkpoint True, now False)" in message
+
+
+def test_a_reused_reply_without_its_original_refuses(
+    fake: FakeOllama, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = stopped(fake, tmp_path)
+    header, *records = ckpt(out).read_text(encoding="ascii").splitlines()
+    original = next(
+        r
+        for r in records
+        if json.loads(r)["config"] == "detector-only" and json.loads(r)["raw_text"]
+    )
+    records.remove(original)
+    ckpt(out).write_text("\n".join([header, *records]) + "\n", encoding="ascii")
+    assert "no stored original" in refused(fake, capsys, live(out, *SMALL))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"raw_text": "{}"},  # the text is stored once
+        {"reason": "truncated"},
+        {"latency_ms": 5},  # a reuse took no call
+        {"kind": "not_called"},
+        {"kind": "refused_context_budget"},
+        {"reused": 1},
+    ],
+)
+def test_a_reused_record_is_only_a_pointer(changes: dict[str, Any]) -> None:
+    good = cp.Record("all", "s001", "reply", None, "triaged", (), "ab", None, None, True)
+    row = json.loads(good.to_json())
+    assert cp._record(row) == good and not good.requested
+    assert cp._record({**row, **changes}) is None

@@ -14,6 +14,12 @@ answers in every selected configuration, and its ``all`` run doubles as the oper
 resumable (D44): every (sample, configuration) pair is written to a checkpoint as soon as it is
 done. Its numbers go to a separate file and never into the README table.
 
+With ``reuse``, each distinct prompt (system and user together) is sent once, and every other pair
+with the same prompt takes that result: the reply, or the error. The configurations that sanitize
+build the same prompt, so they then judge ONE reply, and what differs between them is the defenses
+alone. Each configuration still runs its own detector and validator. A context refusal sends
+nothing, so there is nothing to reuse.
+
 Slicing never changes the facts: the D41 batch patterns are computed from the FULL dataset first,
 and ``--subset``, ``--limit`` and ``--configs`` only choose which alerts are sent to the model.
 """
@@ -33,6 +39,7 @@ from ai_security_assistant.eval.checkpoint import (
     KIND_PROVIDER_ERROR,
     KIND_REFUSED,
     KIND_REPLY,
+    REQUEST_KINDS,
     Checkpoint,
     CheckpointError,
     Key,
@@ -178,13 +185,32 @@ def _prompt_hash(system: str, user: str) -> str:
     return hashlib.sha256(f"{system}\x00{user}".encode("utf-8", "surrogatepass")).hexdigest()
 
 
-class _Recorder:
-    """Wraps the real provider for ONE pair and notes what its call gave and how long it took."""
+def _answer(kind: str, raw_text: str | None, reason: str | None) -> str:
+    """Give the pipeline a recorded result again: the text, or the same error."""
+    if kind == KIND_REPLY and raw_text is not None:
+        return raw_text
+    if kind == KIND_MALFORMED and reason is not None:
+        raise MalformedReply(reason)
+    if kind == KIND_REFUSED:
+        raise ContextBudgetExceeded("recorded refusal")
+    raise ProviderError("recorded error")
 
-    def __init__(self, inner: Provider, clock: Callable[[], float]) -> None:
+
+class _Recorder:
+    """Wraps the real provider for ONE pair and notes what its call gave and how long it took.
+
+    ``answered`` maps a prompt hash to the record that holds its result (empty without reuse): a
+    prompt found there is answered from it, and nothing is sent.
+    """
+
+    def __init__(
+        self, inner: Provider, clock: Callable[[], float], answered: Mapping[str, Record]
+    ) -> None:
         self.name = inner.name
         self._inner = inner
         self._clock = clock
+        self._answered = answered
+        self.reused = False
         self.kind = KIND_NOT_CALLED
         self.reason: str | None = None
         self.raw_text: str | None = None
@@ -194,6 +220,10 @@ class _Recorder:
 
     def complete(self, system: str, user: str) -> str:
         self.prompt_sha256 = _prompt_hash(system, user)
+        source = self._answered.get(self.prompt_sha256)
+        if source is not None:
+            self.reused, self.kind = True, source.kind
+            return _answer(source.kind, source.raw_text, source.reason)
         start = self._clock()
 
         def took() -> int:
@@ -218,12 +248,14 @@ class _Recorder:
 
 
 class _Replay:
-    """Answers with what a checkpoint line recorded, if the prompt is still the same."""
+    """Answers with what a checkpoint line recorded, if the prompt is still the same. ``source``
+    is the line that holds the text: the record itself unless it is a reuse."""
 
     name = "replay"
 
-    def __init__(self, record: Record) -> None:
+    def __init__(self, record: Record, source: Record) -> None:
         self._record = record
+        self._source = source
         self.called = False
 
     def complete(self, system: str, user: str) -> str:
@@ -234,25 +266,19 @@ class _Replay:
                 f"{record.config} {record.sample_id!a}: the prompt differs from the one recorded "
                 "(the code or the data changed since the checkpoint was written)"
             )
-        if record.raw_text is not None:
-            return record.raw_text
-        if record.reason is not None:
-            raise MalformedReply(record.reason)
-        if record.kind == KIND_REFUSED:
-            raise ContextBudgetExceeded("recorded refusal")
-        raise ProviderError("recorded error")
+        return _answer(record.kind, self._source.raw_text, self._source.reason)
 
 
 class _Probe:
-    """Notes whether the pipeline would call the model for a pair. Never calls anything."""
+    """Notes the prompt the pipeline would send for a pair, if any. Never calls anything."""
 
     name = "probe"
 
     def __init__(self) -> None:
-        self.called = False
+        self.prompt_sha256: str | None = None
 
     def complete(self, system: str, user: str) -> str:
-        self.called = True
+        self.prompt_sha256 = _prompt_hash(system, user)
         return ""
 
 
@@ -281,8 +307,20 @@ class _Pair:
         )
 
 
-def _replayed(pair: _Pair, record: Record) -> AlertOutcome:
-    replay = _Replay(record)
+def _source(record: Record, originals: Mapping[str, Record]) -> Record:
+    """The line that holds the text of ``record``."""
+    if not record.reused or record.kind == KIND_PROVIDER_ERROR:  # an error has no text
+        return record
+    source = originals.get(record.prompt_sha256 or "")
+    if source is None or source.kind != record.kind:
+        raise CheckpointError(
+            f"{record.config} {record.sample_id!a}: no stored original for this reused reply"
+        )
+    return source
+
+
+def _replayed(pair: _Pair, record: Record, originals: Mapping[str, Record]) -> AlertOutcome:
+    replay = _Replay(record, _source(record, originals))
     outcome = pair.run(replay)
     same = (
         replay.called is (record.kind != KIND_NOT_CALLED)
@@ -306,6 +344,8 @@ class LiveResult:
     outcomes: Mapping[Key, AlertOutcome]
     selected: int  # pairs
     stopped: str | None = None  # STOPPED_BUDGET, STOPPED_INTERRUPTED or None
+    reuse: bool = False
+    calls_made: int = 0  # requests recorded over all sittings, replaced errors included
 
     @property
     def pending(self) -> int:
@@ -319,12 +359,25 @@ class LiveResult:
     def complete(self) -> bool:
         return self.pending == 0 and self.errored == 0
 
-    def latencies(self, config: str) -> list[int]:
-        """Milliseconds of every call of ``config`` that got a reply, over all sittings."""
+    @property
+    def distinct_prompts(self) -> int:
+        """The different prompts behind the pairs that reached the model step with a request."""
+        return len({r.prompt_sha256 for r in self.records.values() if r.kind in REQUEST_KINDS})
+
+    @property
+    def replies_reused(self) -> int:
+        """Pairs judged on the reply of an identical prompt, with no request of their own."""
+        return sum(
+            1 for r in self.records.values() if r.reused and r.kind in (KIND_REPLY, KIND_MALFORMED)
+        )
+
+    def latencies(self, config: str | None = None) -> list[int]:
+        """Milliseconds of every REAL call that got a reply, over all sittings; of ``config``
+        only, if given. A reused reply took no call, so it has no latency."""
         return [
             r.latency_ms
             for r in self.records.values()
-            if r.config == config
+            if (config is None or r.config == config)
             and r.kind in (KIND_REPLY, KIND_MALFORMED)
             and r.latency_ms is not None
         ]
@@ -364,6 +417,7 @@ def run_live(
     checkpoint: Checkpoint,
     *,
     retry_errors: bool = False,
+    reuse: bool = False,
     seed: str = SEED,
     clock: Callable[[], float] = time.monotonic,
     progress: Callable[[str], None] = lambda _line: None,
@@ -371,8 +425,9 @@ def run_live(
     """Run what the checkpoint does not hold yet; one sample through every configuration, then
     the next. A pair that ended in a provider error is kept as it is unless ``retry_errors``.
 
-    ``samples`` is the selection and ``batch`` the full dataset. Raises ``CheckpointError`` before
-    any call if a recorded pair does not replay exactly.
+    ``samples`` is the selection and ``batch`` the full dataset. ``reuse`` sends each distinct
+    prompt once and must be the same in every sitting of a checkpoint (its header pins it).
+    Raises ``CheckpointError`` before any call if a recorded pair does not replay exactly.
     """
     facts = batch_patterns([sample.alert for sample in batch])
     patterns = {sample.sample_id: facts.get(i) for i, sample in enumerate(batch)}
@@ -383,22 +438,39 @@ def run_live(
     ]
     by_key = {pair.key: pair for pair in pairs}
     outcomes: dict[Key, AlertOutcome] = {}
+    originals = {
+        r.prompt_sha256: r
+        for r in checkpoint.records.values()
+        if r.prompt_sha256 is not None and not r.reused and r.kind in (KIND_REPLY, KIND_MALFORMED)
+    }
     for key, record in checkpoint.records.items():
         if key not in by_key:
             raise CheckpointError("the checkpoint holds a pair that this run did not select")
-        outcomes[key] = _replayed(by_key[key], record)
+        outcomes[key] = _replayed(by_key[key], record, originals)
 
     def waiting(pair: _Pair) -> bool:
         record = checkpoint.records.get(pair.key)
         return record is None or (retry_errors and record.kind == KIND_PROVIDER_ERROR)
 
     todo = [pair for pair in pairs if waiting(pair)]
-    calls = []  # the pairs of ``todo`` that will reach the model
+    # What a prompt already gave. An error counts too (a prompt is asked once), except one that
+    # is about to be retried.
+    answered: dict[str, Record] = {}
+    if reuse:
+        answered.update(originals)
+        if not retry_errors:
+            for r in checkpoint.records.values():
+                if r.prompt_sha256 is not None and r.kind == KIND_PROVIDER_ERROR:
+                    answered.setdefault(r.prompt_sha256, r)
+    calls = []  # the pairs of ``todo`` that will send a request
+    planned = set(answered)
     for pair in todo:
         probe = _Probe()
         pair.run(probe)
-        if probe.called:
+        if probe.prompt_sha256 is not None and probe.prompt_sha256 not in planned:
             calls.append(pair.key)
+            if reuse:
+                planned.add(probe.prompt_sha256)
 
     def eta() -> str:
         return _eta([config for config, _sample in calls], checkpoint.records)
@@ -412,7 +484,7 @@ def run_live(
 
     stopped = None
     for pair in todo:
-        recorder = _Recorder(provider, clock)
+        recorder = _Recorder(provider, clock, answered)
         try:
             outcome = pair.run(recorder)
             if recorder.exhausted:
@@ -423,6 +495,7 @@ def run_live(
                 sample_id=pair.sample.sample_id,
                 kind=recorder.kind,
                 reason=recorder.reason,
+                reused=recorder.reused,
                 status=outcome.status.value,
                 reasons=outcome.reasons,
                 prompt_sha256=recorder.prompt_sha256,
@@ -431,9 +504,13 @@ def run_live(
             )
             checkpoint.append(record)
             outcomes[pair.key] = outcome
+            if reuse and record.requested and record.prompt_sha256 is not None:
+                answered[record.prompt_sha256] = record
             if pair.key in calls:
                 calls.remove(pair.key)
             took = "" if record.latency_ms is None else f" in {_duration(record.latency_ms / 1000)}"
+            if record.reused:
+                took = " (reused)"
             progress(
                 f"aisa: [{len(checkpoint.records)}/{len(pairs)}] {record.config} "
                 f"{record.sample_id}: {record.eval_status}{took}; {eta()}"
@@ -467,4 +544,4 @@ def run_live(
         _empty_run(DefenseConfig.ALL, provider.name, seed),
     )
     run = EvalRun(seed, tuple(samples), tuple(runs), operational, batch=tuple(batch))
-    return LiveResult(run, records, outcomes, len(pairs), stopped)
+    return LiveResult(run, records, outcomes, len(pairs), stopped, reuse, checkpoint.calls_made)

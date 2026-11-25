@@ -194,6 +194,9 @@ def test_a_full_budget_run_writes_the_results(
     assert cli.main(live(out, "--max-calls", str(4 * SUBSET))) == 0
     assert stand_in == ["anthropic"]
     metrics = json.loads(out.read_text(encoding="ascii"))
+    assert metrics["live"]["reuse"] is False  # reuse is the default for ollama only
+    assert metrics["live"]["replies_reused"] == 0
+    assert metrics["live"]["calls_made"] > metrics["live"]["distinct_prompts"]
     assert metrics["dataset"]["alerts"] == SUBSET
     assert set(metrics["totals"]["full"]["attack_success"]) == {c.label for c in DefenseConfig}
     printed = capsys.readouterr().out

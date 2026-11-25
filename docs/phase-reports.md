@@ -130,3 +130,5 @@ Phase 11b (follow-up to Phase 11, Phase 12 step 0): label review of the 49-alert
 
 Graphify: used for `graphify update .` at start (graph older than HEAD; AST only, no LLM, no network, 2931 nodes) and after the new module, not queried, because the Phase 11 report and hand-off named the modules; files opened in this repo: about 29, versus about the same without the graph (no saving this phase).
 
+Phase 12b (owner follow-up): reply reuse, default for `ollama` (`--no-reuse` to opt out), so each distinct prompt is sent once and the sanitized configs judge one reply; the checkpoint pins `reuse` (version 2) and stores a reused reply once; results add `reuse`, `calls_made`, `distinct_prompts`, `replies_reused` and `latency_ms_all_calls` (Phase 13 should use that one for latency); with the fake transport verdicts are identical with and without reuse, calls drop from 464 to 240 (main) and 193 to 97 (Windows) by construction, and interrupted runs resume without asking twice; estimated saving about 30%, not half, because Ollama already answers a repeated prompt faster; gate green, 2702 tests, 100% line and branch coverage; no further live call.
+

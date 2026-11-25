@@ -21,8 +21,9 @@ time out).
 mkdir -p reports
 ```
 
-A trial with two alerts first (8 calls). Use its own file name: a checkpoint is bound to its
-`--limit`, so a trial cannot be grown into the full run.
+A trial with two alerts first (4 calls). Use its own file name: a checkpoint is bound to its
+`--limit`, so a trial cannot be grown into the full run. If `reports/trial.json` exists from an
+earlier trial, pick another name.
 
 ```bash
 .venv/Scripts/aisa eval --provider ollama --dataset windows --limit 2 --out reports/trial.json
@@ -38,15 +39,33 @@ The two full runs, the shorter one first:
 .venv/Scripts/aisa eval --provider ollama --dataset main --out reports/qwen3-main.json
 ```
 
-| Run | Pairs (alerts x 4 configs) | Model calls |
-| --- | --- | --- |
-| Windows | 196 | about 193 |
-| Main | 480 | about 464 |
+| Run | Pairs (alerts x 4 configs) | Calls with reuse (default) | Calls with `--no-reuse` |
+| --- | --- | --- | --- |
+| Windows | 196 | about 97 | about 193 |
+| Main | 480 | about 240 | about 464 |
 
-The rest are blocked by the detector or refused by the context guard before any call. At an
-assumed 50 to 60 seconds a call that is about 3 hours for Windows and 6 to 8 hours for main. This
-is an assumption, not a measurement: after the first calls the eval prints an estimate from your
-own machine, for example `[37/196] all w012: triaged in 55s; 156 model calls left, ETA about 2h23m`.
+| Estimated time | With reuse | With `--no-reuse` |
+| --- | --- | --- |
+| Windows | about 2 hours | about 2.7 hours |
+| Main | about 4.5 hours | about 6.5 hours |
+
+These come from one trial on the owner's CPU laptop (2026-11-25, two Windows-set alerts, 8 calls):
+46 to 90 seconds for a prompt Ollama had not just seen, about 30 seconds for an immediate repeat,
+which Ollama's own prompt cache makes cheaper. So reuse saves about 30%, not half. No main-set
+alert was measured. After the first calls the eval prints an estimate from your own machine, for
+example `[38/196] detector-only w010: triaged in 1m15s; 77 model calls left, ETA about 1h31m`.
+
+**Reply reuse.** For `ollama`, each distinct prompt (system and user together) is sent once. The
+three sanitized configurations build the same prompt, so they judge the same reply, each with its
+own detector and validator; `none` has its own prompt. This is not only faster: in the trial the
+same prompt, with temperature 0 and a fixed seed, gave a different reply on a repeat for one of two
+alerts, so with reuse the differences between those three configurations come from the defenses
+alone. `--no-reuse` sends every prompt and measures the model's own variation too. The results file
+records `reuse`, `calls_made` (requests sent and recorded, retried errors included),
+`distinct_prompts` and `replies_reused`. Latency counts real calls only: with reuse,
+`validator-only` and `all` usually have `n` 0, and `latency_ms_all_calls` is the figure over every
+real call (uncached prompts, so higher than a `--no-reuse` mean). In the samples file
+`called_provider` is true for a reused pair too.
 
 **Stop and resume.** Every finished alert is saved at once to
 `reports/<name>.checkpoint.jsonl`. **Run exactly the same command to continue.** To stop:
@@ -56,8 +75,9 @@ own machine, for example `[37/196] all w012: triaged in 55s; 156 model calls lef
 - or plan the sitting: `--max-calls 100` stops cleanly after 100 calls;
 - or close the window. Nothing finished is lost, but no results file is written in that sitting.
 
-**Errors.** A timeout or an HTTP error is recorded as `provider_error` and the run goes on. A
-resumed run keeps it unless you add `--retry-errors`; until then the results stay
+**Errors.** A timeout or an HTTP error is recorded as `provider_error` and the run goes on. With
+reuse, every configuration that shares the failed prompt gets that error, and a retry sends it once.
+A resumed run keeps it unless you add `--retry-errors`; until then the results stay
 `"complete": false` and the errored pairs are in no numerator or denominator. If Ollama stops
 altogether, every remaining alert errors quickly; start Ollama and rerun with `--retry-errors`.
 
@@ -65,8 +85,9 @@ altogether, every remaining alert errors quickly; start Ollama and rerun with `-
 as `refused_context_budget`, which is final: it is never retried and never counts as accurate.
 
 **A resume that refuses to start** (exit 2, nothing called, nothing changed) names the difference:
-the dataset, KB version, prompt version, seed, provider, model, subset, limit or configs. It also
-refuses if a recorded alert no longer gets the same prompt or the same decision. So **do not change
+the dataset, KB version, prompt version, seed, provider, model, subset, limit, configs or reuse
+(add or drop `--no-reuse` and it refuses; so does a checkpoint written before reply reuse existed).
+It also refuses if a recorded alert no longer gets the same prompt or the same decision. So **do not change
 or update the code, and do not pull the model again, between sittings** (a re-pulled model under
 the same name is not detected). Settings come from the environment only: `aisa eval` ignores
 `.env`, so set them on the command line, for example

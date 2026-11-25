@@ -25,7 +25,9 @@ document; it has no README block.
 (docs/LIVE_EVAL.md). It is resumable (D44): every alert is written to a checkpoint as soon as it is
 done, and the same command continues from there. ``--dataset``, ``--subset``, ``--limit`` and
 ``--configs`` choose which alerts are sent to the model; ``--retry-errors`` runs again the pairs
-that ended in a provider error. Progress and a rough time estimate go to stderr. Next to ``FILE`` it
+that ended in a provider error. With ``ollama`` each distinct prompt is sent once and the
+configurations that share it judge the same reply; ``--no-reuse`` sends every one.
+Progress and a rough time estimate go to stderr. Next to ``FILE`` it
 writes ``<stem>.samples.json``: per sample and configuration, the status, reason codes and booleans
 only (no model or alert text). A partial run writes both with ``"complete": false``; complete
 results are never overwritten. ``anthropic`` spends real money, so it needs ``AISA_LIVE=1``, a key
@@ -268,6 +270,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="live eval only: run again the pairs that ended in a provider error",
     )
+    evaluate.add_argument(
+        "--no-reuse",
+        action="store_true",
+        help="live eval only: send every prompt; by default ollama sends each distinct prompt once",
+    )
     return parser
 
 
@@ -442,6 +449,8 @@ def _live_paths(args: argparse.Namespace) -> tuple[Path, Path, Path] | str:
 
 def _live_report(result: LiveResult, budget: CallBudget) -> None:
     print(f"aisa: live eval used {budget.used} of {budget.max_calls} calls")
+    if result.reuse:
+        print(f"aisa: {result.replies_reused} pairs reused the reply of an identical prompt")
     if result.stopped == STOPPED_BUDGET:
         print("aisa: stopped at the call budget")
     elif result.stopped == STOPPED_INTERRUPTED:
@@ -479,6 +488,7 @@ def _live_eval(args: argparse.Namespace) -> int:
         return _error(str(exc))
     sha256 = dataset_sha256(windows_dataset_text() if windows else dataset_text())
     model = str(getattr(provider, "model", provider.name))
+    reuse = args.provider == "ollama" and not args.no_reuse
     pinned: dict[str, object] = {
         "checkpoint_version": CHECKPOINT_VERSION,
         "dataset": args.dataset,
@@ -492,6 +502,7 @@ def _live_eval(args: argparse.Namespace) -> int:
         "subset": subset,
         "limit": args.limit,
         "configs": [config.label for config in configs],
+        "reuse": reuse,
     }
     try:
         checkpoint = Checkpoint.open(checkpoint_file, pinned, utc_now().isoformat())
@@ -505,6 +516,7 @@ def _live_eval(args: argparse.Namespace) -> int:
             provider,
             checkpoint,
             retry_errors=args.retry_errors,
+            reuse=reuse,
             clock=monotonic,
             progress=_progress,
         )
@@ -550,6 +562,7 @@ def _eval(args: argparse.Namespace) -> int:
         "--configs": args.configs,
         "--checkpoint": args.checkpoint,
         "--retry-errors": args.retry_errors or None,
+        "--no-reuse": args.no_reuse or None,
     }
     for flag, value in live_only.items():
         if value is not None:

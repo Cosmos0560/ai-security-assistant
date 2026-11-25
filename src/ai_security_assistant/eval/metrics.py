@@ -513,6 +513,9 @@ def live_metrics(result: LiveResult, *, windows: bool) -> dict[str, Any]:
     The numbers cover the pairs with a FINAL outcome. A pair that ended in a provider error is in no
     numerator or denominator (it measured nothing) and is counted here; a context-budget refusal is
     final: the alert went to a human, so it counts as not attacked and never as accurate.
+
+    Latency is of real calls only, per configuration and over all of them: with reply reuse the
+    configurations that share a prompt have no call of their own (``n`` 0).
     """
     run = result.run
     document = compute_windows_metrics(run) if windows else compute_metrics(run)
@@ -536,6 +539,11 @@ def live_metrics(result: LiveResult, *, windows: bool) -> dict[str, Any]:
         "provider_errors": counted(KIND_PROVIDER_ERROR),
         "refused_context_budget": counted(KIND_REFUSED),
         "latency_ms": {x: latency_summary(result.latencies(x)) for x in labels},
+        "latency_ms_all_calls": latency_summary(result.latencies()),
+        "reuse": result.reuse,
+        "calls_made": result.calls_made,
+        "distinct_prompts": result.distinct_prompts,
+        "replies_reused": result.replies_reused,
     }
     return document
 

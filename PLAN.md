@@ -982,6 +982,16 @@ be replaced only by the same checkpoint; complete results never are. The checkpo
 with `.checkpoint.jsonl`. Pattern metrics and pattern facts come from the full dataset whatever the
 slice. `aisa eval` still ignores `.env`.
 
+Phase 12b (owner), reply reuse, default for `ollama`, off with `--no-reuse`, never for
+`anthropic`: each distinct prompt hash is sent once per run, and the other pairs with that prompt
+take its reply or its error (a context refusal sends nothing and is not shared). A reused line is a
+pointer: no text, reason or latency; the one line that has the reply is its original, and a
+missing original refuses. `reuse` is pinned in the header (checkpoint version 2), so sittings
+cannot mix the two. Results record `reuse`, `calls_made`, `distinct_prompts`, `replies_reused`;
+latency is of real calls only, with `latency_ms_all_calls` over all of them. Reason: in the first
+trial an identical prompt did not always give an identical reply, so sharing one reply also makes
+the sanitized configs differ by their defenses only.
+
 **D45. The model comparison table is generated from committed results files.**
 `eval/compare_table.py` reads `docs/live-eval/*.json` (only `"complete": true` runs) plus the mock
 eval. It renders one block in the README with these rows:
