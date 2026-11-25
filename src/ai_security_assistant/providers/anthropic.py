@@ -127,6 +127,10 @@ class AnthropicProvider:
                 ) from None
         self._client = client
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     def __repr__(self) -> str:
         return f"AnthropicProvider(model={self._model!r}, budget={self._budget!r})"
 

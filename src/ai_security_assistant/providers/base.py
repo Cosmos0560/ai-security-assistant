@@ -11,6 +11,8 @@ signals trouble with a ``ProviderError`` subclass instead of returning partial t
   triage maps it to a parse failure;
 * ``ProviderConfigError``: the provider cannot start (missing key, missing package); the CLI maps
   it to exit 2 before any alert is touched;
+* ``ContextBudgetExceeded``: the prompt might not fit the model's context, so no request was made;
+  triage maps it to ``refused_context_budget``, which is final (a retry cannot help);
 * any other ``ProviderError``: the call failed; triage maps it to ``provider_error``.
 
 Error messages never carry the API key or any reply text.
@@ -31,6 +33,10 @@ class ProviderConfigError(ProviderError):
 
 class BudgetExhausted(ProviderError):
     """The run's call budget is spent."""
+
+
+class ContextBudgetExceeded(ProviderError):
+    """The prompt was refused before the request because it might not fit the context."""
 
 
 class MalformedReply(ProviderError):

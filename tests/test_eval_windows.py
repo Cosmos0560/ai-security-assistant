@@ -288,7 +288,10 @@ Answer = Callable[[WindowsSample], AlertOutcome]
 def hand_built(answer: Answer) -> dict[str, Any]:
     """The metrics of a run in which every configuration gave ``answer(sample)``."""
     outcomes = tuple(answer(sample) for sample in SAMPLES)
-    runs = tuple(ConfigRun(config, "hand", "2", "canary", outcomes) for config in DefenseConfig)
+    runs = tuple(
+        ConfigRun(config, "hand", "2", "canary", outcomes, tuple(SAMPLES))
+        for config in DefenseConfig
+    )
     return compute_windows_metrics(EvalRun(SEED, tuple(SAMPLES), runs, runs[-1]))
 
 
@@ -602,7 +605,7 @@ def test_the_cli_writes_the_windows_metrics(
     ("extra", "message"),
     [
         (["--readme", "README.md"], "main dataset only"),
-        (["--provider", "anthropic"], "main dataset only"),
+        (["--limit", "2"], "live eval only"),
     ],
 )
 def test_the_cli_refuses_windows_where_it_does_not_apply(

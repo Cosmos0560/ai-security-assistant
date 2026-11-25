@@ -442,10 +442,12 @@ def test_eval_ignores_llm_provider_and_dotenv(
     assert router.calls == []
 
 
-def test_eval_has_no_ollama_choice_yet(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as exc:
-        main(["eval", "--provider", "ollama"])
-    assert exc.value.code == 2
+def test_an_ollama_eval_without_a_results_file_calls_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    assert main(["eval", "--provider", "ollama"]) == 2
+    assert "needs --out" in capsys.readouterr().err
 
 
 def test_dry_run_reads_no_configuration_and_calls_nothing(

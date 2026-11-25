@@ -41,6 +41,7 @@ from urllib.parse import urlsplit
 
 from ai_security_assistant.providers.base import (
     CallBudget,
+    ContextBudgetExceeded,
     MalformedReply,
     ProviderConfigError,
     ProviderError,
@@ -163,6 +164,10 @@ class OllamaProvider:
         self._timeout = parse_timeout(raw_timeout) if raw_timeout else DEFAULT_TIMEOUT_SECONDS
         self._transport: Transport = urllib_transport if transport is None else transport
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     def __repr__(self) -> str:
         return f"OllamaProvider(model={self._model!r}, budget={self._budget!r})"
 
@@ -258,9 +263,9 @@ def estimate_prompt_tokens(system: str, user: str) -> int:
 
 
 def check_prompt_fits(system: str, user: str) -> None:
-    """Raise ``ProviderError`` when the prompt might not fit ``num_ctx`` next to the reply."""
+    """Raise ``ContextBudgetExceeded`` when the prompt might not fit ``num_ctx`` with the reply."""
     if estimate_prompt_tokens(system, user) > PROMPT_TOKEN_BUDGET:
-        raise ProviderError("prompt does not fit the context budget")
+        raise ContextBudgetExceeded("prompt does not fit the context budget")
 
 
 def _message_content(body: bytes) -> str:

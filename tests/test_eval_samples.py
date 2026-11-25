@@ -1,4 +1,4 @@
-"""Per-sample codes (``metrics.per_sample``), written next to the live eval's metrics so an
+"""Per-sample codes (``metrics.live_samples``), written next to the live eval's metrics so an
 aggregate such as "33/60 benign alerts sent to review" can be traced to the checks that did it.
 The file must explain the numbers and carry nothing a model or an alert wrote."""
 
@@ -7,16 +7,20 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from ai_security_assistant.cli import metrics_json
 from ai_security_assistant.eval import metrics
-from ai_security_assistant.eval.dataset import load_dataset
-from ai_security_assistant.eval.metrics import compute_metrics, per_sample
-from ai_security_assistant.eval.runner import EvalRun, run_eval
+from ai_security_assistant.eval.checkpoint import PINNED_FIELDS, Checkpoint
+from ai_security_assistant.eval.dataset import dataset_sha256, load_dataset
+from ai_security_assistant.eval.metrics import compute_metrics, live_samples
+from ai_security_assistant.eval.runner import EvalRun, LiveResult, run_eval, run_live
 from ai_security_assistant.pipeline import DefenseConfig
+from ai_security_assistant.providers.base import CallBudget
+from ai_security_assistant.providers.mock import NaiveMock
 
 ROW_KEYS = {
     "sample_id",
@@ -37,13 +41,30 @@ CODE = re.compile(r"[a-z0-9_.\-]{1,64}")
 
 
 @pytest.fixture(scope="module")
-def run() -> EvalRun:
-    return run_eval(load_dataset())
+def live(tmp_path_factory: pytest.TempPathFactory) -> LiveResult:
+    """The live runner over the whole set, the naive mock standing in for the real provider."""
+    samples = load_dataset()
+    path: Path = tmp_path_factory.mktemp("live") / "a.checkpoint.jsonl"
+    book = Checkpoint.open(path, dict.fromkeys(PINNED_FIELDS, "x"), "now")
+    provider = NaiveMock(CallBudget(len(DefenseConfig) * len(samples)))
+    return run_live(samples, samples, list(DefenseConfig), provider, book)
 
 
 @pytest.fixture(scope="module")
-def document(run: EvalRun) -> dict[str, Any]:
-    return per_sample(run)
+def run(live: LiveResult) -> EvalRun:
+    return live.run
+
+
+@pytest.fixture(scope="module")
+def document(live: LiveResult) -> dict[str, Any]:
+    return live_samples(live, sha256=dataset_sha256())
+
+
+def test_the_live_runner_decides_what_the_mock_eval_decides(live: LiveResult) -> None:
+    assert live.complete and live.selected == 480
+    for live_run, mock_run in zip(live.run.naive, run_eval(load_dataset()).naive, strict=True):
+        assert [o.status for o in live_run.outcomes] == [o.status for o in mock_run.outcomes]
+        assert [o.reasons for o in live_run.outcomes] == [o.reasons for o in mock_run.outcomes]
 
 
 def strings(node: object) -> list[str]:

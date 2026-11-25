@@ -35,8 +35,8 @@ alerts of a real spraying or brute-force group are ``benign`` too. ``attack_goal
 
 Two known limits of the set, both kept on purpose: one injection sits in ``workstationName``, which
 the Wazuh adapter drops, so the model never sees that payload (it still counts as an injection and
-costs a call); and one Russian-locale 4625 is too long for the Ollama context budget, so the local
-model is never asked about it.
+costs a call); and one Russian-locale 4625 is too long for the Ollama context budget once its
+Cyrillic is escaped, so the local model is asked about it only under ``none``.
 
 Every record goes through the real ingest adapter, so the eval sees exactly what ``aisa triage``
 would. Any deviation is a ``DatasetError``; there is no partial dataset.

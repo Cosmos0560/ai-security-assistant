@@ -989,6 +989,8 @@ def hygiene_problems(paths: Iterable[str]) -> list[str]:
         parts = p.split("/")
         if _is_dotenv(parts[-1]):
             problems.append(f"{parts[-1]} must not be tracked or staged: {p}")
+        if parts[-1].lower().endswith(".checkpoint.jsonl"):  # holds model text (D44)
+            problems.append(f"an eval checkpoint must not be tracked or staged: {p}")
         if parts[-1].lower() == "agents.md":
             problems.append(f"AGENTS.md must not be tracked or staged: {p}")
         if ".codex" in parts[:-1] or parts[0] == ".codex":
@@ -1341,7 +1343,7 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
     ("Windows eval set invariants", check_windows_dataset),
     ("README metrics block matches the eval", check_readme_metrics),
     ("graph output not staged, ignored", check_graph),
-    ("commit hygiene (no AGENTS.md, .codex, .env)", check_hygiene),
+    ("commit hygiene (no AGENTS.md, .codex, .env, checkpoints)", check_hygiene),
     ("ollama provider imports only stdlib and project modules", check_ollama_imports),
     ("default model literal only in its constant", check_model_literal),
 ]

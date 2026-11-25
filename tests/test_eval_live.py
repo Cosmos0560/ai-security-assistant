@@ -1,6 +1,7 @@
 """The optional live eval (``aisa eval --provider anthropic``, docs/LIVE_EVAL.md), WITHOUT a live
 call: every guard is checked, and the run itself is exercised with the naive mock standing in for
-the real provider. No test here builds an Anthropic client or opens a socket.
+the real provider. No test here builds an Anthropic client or opens a socket. Resuming, slicing and
+the Ollama flow are in ``test_eval_resume.py``.
 """
 
 from __future__ import annotations
@@ -12,13 +13,18 @@ import pytest
 
 from ai_security_assistant import cli
 from ai_security_assistant.eval.dataset import load_dataset
-from ai_security_assistant.eval.runner import SEED, run_eval, run_live_eval
-from ai_security_assistant.pipeline import DefenseConfig, Status
+from ai_security_assistant.eval.runner import select_samples
+from ai_security_assistant.pipeline import DefenseConfig
 from ai_security_assistant.providers.base import CallBudget, ProviderConfigError
 from ai_security_assistant.providers.mock import NaiveMock
 
 ROOT = Path(__file__).resolve().parent.parent
 SUBSET = 12  # a small slice of the dataset keeps these tests fast
+
+
+@pytest.fixture(autouse=True)
+def outside_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(cli.CI_ENV, raising=False)  # the live eval refuses under CI
 
 
 @pytest.fixture
@@ -38,6 +44,21 @@ def stand_in(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 def live(out: Path, *extra: str) -> list[str]:
     return ["eval", "--provider", "anthropic", "--out", str(out), *extra]
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "ollama"])
+def test_the_live_eval_refuses_under_ci(
+    provider: str,
+    stand_in: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(cli.CI_ENV, "true")
+    args = ["eval", "--provider", provider, "--out", str(tmp_path / "m.json"), "--max-calls", "9"]
+    assert cli.main(args) == 2
+    assert "CI is set" in capsys.readouterr().err
+    assert stand_in == [] and list(tmp_path.iterdir()) == []
 
 
 def test_the_live_eval_needs_the_opt_in(
@@ -120,9 +141,13 @@ def test_a_failed_write_keeps_the_paid_results_on_stdout(
     monkeypatch.setenv(cli.LIVE_ENV, "1")
     monkeypatch.setattr(cli, "load_dataset", lambda: load_dataset()[:SUBSET])
 
+    class Racing(NaiveMock):
+        def complete(self, system: str, user: str) -> str:
+            out.write_text("written by someone else", encoding="utf-8")  # appears mid-run
+            return super().complete(system, user)
+
     def racing_provider(name: str, budget: CallBudget) -> NaiveMock:
-        out.write_text("written by someone else", encoding="utf-8")  # appears mid-run
-        return NaiveMock(budget)
+        return Racing(budget)
 
     monkeypatch.setattr(cli, "make_provider", racing_provider)
     assert cli.main(live(out, "--max-calls", str(4 * SUBSET))) == 2
@@ -189,15 +214,7 @@ def test_a_short_budget_is_reported_as_incomplete(
     assert out.is_file()
 
 
-def test_the_live_runner_shares_one_budget_and_one_provider() -> None:
-    samples = load_dataset()[:SUBSET]
-    budget = CallBudget(4 * SUBSET)
-    run = run_live_eval(samples, NaiveMock(budget), budget)
-    assert [r.config for r in run.naive] == list(DefenseConfig)
-    assert run.well_behaved_all is run.naive_run(DefenseConfig.ALL)
-    assert budget.used <= 4 * SUBSET
-    # With the naive mock standing in, the per-config outcomes equal the mock-only eval's.
-    mock_run = run_eval(samples, SEED)
-    for live_cfg, mock_cfg in zip(run.naive, mock_run.naive, strict=True):
-        assert [o.status for o in live_cfg.outcomes] == [o.status for o in mock_cfg.outcomes]
-    assert all(o.status is not Status.BUDGET_EXHAUSTED for r in run.naive for o in r.outcomes)
+def test_the_live_selection_of_the_whole_set_is_the_whole_set() -> None:
+    samples = load_dataset()
+    selected = select_samples(samples)
+    assert sorted(s.sample_id for s in selected) == [s.sample_id for s in samples]

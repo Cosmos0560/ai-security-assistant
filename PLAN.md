@@ -932,7 +932,8 @@ five are reported apart: accepted n of 5, and accepted with severity at most `lo
 expected parent technique also accepts its sub-techniques; an expected sub-technique needs an
 exact match. Validator check 3 still accepts only allowlisted IDs. Kept limits: the adapter drops
 `workstationName`, so the model never sees that one injection; the Ollama context guard refuses one
-Russian-locale 4625, so the local model is never asked about it.
+Russian-locale 4625 in the three configurations whose prompt escapes Cyrillic, so the local model
+is asked about it only under `none`.
 
 **D44. The live eval is resumable, sliceable and timed.**
 `aisa eval --provider {anthropic,ollama} --out FILE` gains:
@@ -964,6 +965,22 @@ Results:
   to run when `CI` is set.
 Rejected: restarting a 6–8 h run after an interruption; latency in the mock eval
 (non-deterministic, would break the drift check).
+
+Phase 12 details: pairs run sample by sample, every selected config before the next sample. The
+fixed stratified order alternates benign and injection; within each, the strata take turns (main:
+category, or hard negative or not; Windows: attack goal, or group). The checkpoint also pins the
+dataset name and the naive prompt version. A line stores the call's kind, the raw reply, the
+decision, a hash of the prompt and the latency; a resume replays every line through the pipeline
+and refuses if the prompt or the decision differs. A later line replaces an earlier one; an
+unfinished last line is cut off. Kinds: reply, malformed (final), `provider_error` (timeout or HTTP
+error; retried only with `--retry-errors`, in no denominator, keeps `"complete": false`),
+`refused_context_budget` (owner: its own final status, reason `schema.refused_context_budget`,
+never retried), and not called (detector block). `--max-calls` is per invocation, optional for
+`ollama`; a pair beyond it is not recorded. Latency covers calls that got a reply (nearest-rank
+p95). Partial results are written at the end of a sitting (also after Ctrl+C or the budget) and may
+be replaced only by the same checkpoint; complete results never are. The checkpoint name must end
+with `.checkpoint.jsonl`. Pattern metrics and pattern facts come from the full dataset whatever the
+slice. `aisa eval` still ignores `.env`.
 
 **D45. The model comparison table is generated from committed results files.**
 `eval/compare_table.py` reads `docs/live-eval/*.json` (only `"complete": true` runs) plus the mock

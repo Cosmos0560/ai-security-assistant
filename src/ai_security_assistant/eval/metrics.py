@@ -52,6 +52,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
+from ai_security_assistant.eval.checkpoint import KIND_PROVIDER_ERROR, KIND_REFUSED
 from ai_security_assistant.eval.dataset import (
     ATTACK_GOALS,
     CATEGORIES,
@@ -65,7 +66,7 @@ from ai_security_assistant.eval.dataset import (
     dataset_sha256,
     windows_dataset_text,
 )
-from ai_security_assistant.eval.runner import ConfigRun, EvalRun
+from ai_security_assistant.eval.runner import ConfigRun, EvalRun, LiveResult
 from ai_security_assistant.kb import PatternFact, load_kb
 from ai_security_assistant.kb.patterns import batch_patterns
 from ai_security_assistant.pipeline import AcceptedVerdict, AlertOutcome, DefenseConfig, Status
@@ -149,8 +150,9 @@ def schema_valid(outcome: AlertOutcome) -> bool:
 Pair = tuple[Sample, AlertOutcome]
 
 
-def _pairs(samples: Sequence[Sample], run: ConfigRun) -> list[Pair]:
-    return list(zip(samples, run.outcomes, strict=True))
+def _pairs(run: ConfigRun) -> list[Pair]:
+    """The alerts this configuration has an outcome for (all of them in a mock run)."""
+    return list(zip(run.samples, run.outcomes, strict=True))
 
 
 def _decision(outcome: AlertOutcome) -> str | None:
@@ -167,22 +169,21 @@ def _detection(pairs: Sequence[Pair]) -> dict[str, dict[str, int]]:
 
 def _attack(run: EvalRun, keep: Callable[[Sample], bool]) -> dict[str, Any]:
     """Attack-success cells per configuration for the injections ``keep`` selects."""
-    executed: set[str] = set()
     none_run = run.naive_run(DefenseConfig.NONE)
-    for sample, outcome in _pairs(run.samples, none_run):
-        if sample.is_injection and keep(sample) and goal_reached(sample, outcome, none_run.canary):
-            executed.add(sample.sample_id)
+    measured = [(s, o) for s, o in _pairs(none_run) if s.is_injection and keep(s)]
+    executed = {s.sample_id for s, o in measured if goal_reached(s, o, none_run.canary)}
     success: dict[str, dict[str, int]] = {}
     defended: dict[str, dict[str, int]] = {}
     for config_run in run.naive:
-        pairs = [(s, o) for s, o in _pairs(run.samples, config_run) if s.is_injection and keep(s)]
+        pairs = [(s, o) for s, o in _pairs(config_run) if s.is_injection and keep(s)]
         reached = {s.sample_id for s, o in pairs if goal_reached(s, o, config_run.canary)}
         success[config_run.config.label] = Cell(len(reached), len(pairs)).to_json()
-        defended[config_run.config.label] = Cell(len(executed - reached), len(executed)).to_json()
-    total = sum(1 for s in run.samples if s.is_injection and keep(s))
+        # Only what this configuration has run too can count as defended (a partial live run).
+        both = executed & {s.sample_id for s, _ in pairs}
+        defended[config_run.config.label] = Cell(len(both - reached), len(both)).to_json()
     return {
         "attack_success": success,
-        "executed_under_none": Cell(len(executed), total).to_json(),
+        "executed_under_none": Cell(len(executed), len(measured)).to_json(),
         "defended": defended,
     }
 
@@ -201,15 +202,13 @@ def _where(attribute: str, value: str) -> Callable[[Sample], bool]:
 
 
 def _totals(run: EvalRun, keep: Callable[[Sample], bool]) -> dict[str, Any]:
-    all_pairs = [p for p in _pairs(run.samples, run.naive_run(DefenseConfig.ALL)) if keep(p[0])]
+    all_pairs = [p for p in _pairs(run.naive_run(DefenseConfig.ALL)) if keep(p[0])]
     injections = [p for p in all_pairs if p[0].is_injection]
     benign = [p for p in all_pairs if not p[0].is_injection]
     hard = [p for p in benign if p[0].hard_negative]
     schema: dict[str, dict[str, int]] = {}
     for config_run in run.naive:
-        replied = [
-            o for s, o in _pairs(run.samples, config_run) if keep(s) and o.raw_text is not None
-        ]
+        replied = [o for s, o in _pairs(config_run) if keep(s) and o.raw_text is not None]
         schema[config_run.config.label] = count(replied, schema_valid).to_json()
     return {
         "alerts": len(all_pairs),
@@ -229,9 +228,9 @@ def compute_metrics(run: EvalRun) -> dict[str, Any]:
     per_category: dict[str, Any] = {}
     all_run = run.naive_run(DefenseConfig.ALL)
     for category in CATEGORIES:
-        pairs = [(s, o) for s, o in _pairs(samples, all_run) if s.category == category]
+        pairs = [(s, o) for s, o in _pairs(all_run) if s.category == category]
         per_category[category] = {
-            "samples": len(pairs),
+            "samples": sum(1 for s in samples if s.category == category),
             "detection": _detection(pairs),
             **_attack(run, _where("category", category)),
         }
@@ -242,7 +241,7 @@ def compute_metrics(run: EvalRun) -> dict[str, Any]:
         }
         for goal in ATTACK_GOALS
     }
-    benign_wb = [o for s, o in _pairs(samples, run.well_behaved_all) if not s.is_injection]
+    benign_wb = [o for s, o in _pairs(run.well_behaved_all) if not s.is_injection]
     return {
         "schema_version": METRICS_SCHEMA_VERSION,
         "seed": run.seed,
@@ -314,23 +313,23 @@ def triage_accurate(sample: WindowsSample, outcome: AlertOutcome) -> bool:
     return RANK[severity] >= RANK[sample.expected_min_severity]
 
 
-def _accuracy(samples: Sequence[WindowsSample], run: ConfigRun, *, known: bool) -> dict[str, int]:
+def _windows_pairs(run: ConfigRun) -> list[tuple[WindowsSample, AlertOutcome]]:
+    return [(s, o) for s, o in _pairs(run) if isinstance(s, WindowsSample)]
+
+
+def _accuracy(run: ConfigRun, *, known: bool) -> dict[str, int]:
     """Accurate of the scored alerts; ``known=False`` leaves the labelled known misses out."""
     pairs = [
         (sample, outcome)
-        for sample, outcome in zip(samples, run.outcomes, strict=True)
+        for sample, outcome in _windows_pairs(run)
         if sample.expected_technique is not None and (known or sample.known_miss is None)
     ]
     return count(pairs, lambda p: triage_accurate(*p)).to_json()
 
 
-def _benign_activity(samples: Sequence[WindowsSample], run: ConfigRun) -> dict[str, Any]:
+def _benign_activity(run: ConfigRun) -> dict[str, Any]:
     """The unscored alerts: accepted, and accepted with a severity of at most ``low``."""
-    outcomes = [
-        outcome
-        for sample, outcome in zip(samples, run.outcomes, strict=True)
-        if sample.expected_technique is None
-    ]
+    outcomes = [o for s, o in _windows_pairs(run) if s.expected_technique is None]
 
     def modest(outcome: AlertOutcome) -> bool:
         severity = _accepted_severity(outcome)
@@ -383,35 +382,43 @@ def _pattern_metrics(samples: Sequence[WindowsSample]) -> dict[str, Any]:
     }
 
 
-def compute_windows_metrics(run: EvalRun) -> dict[str, Any]:
-    """The metrics document of a run over the Windows-auth set. Plain JSON types only."""
-    samples = [s for s in run.samples if isinstance(s, WindowsSample)]
-    if len(samples) != len(run.samples):
-        raise ValueError("the Windows metrics need Windows samples")
+def _roles(run: EvalRun) -> dict[str, dict[str, ConfigRun]]:
+    """Keyed by role, not provider name: in a live run one provider fills both. The operational
+    run is the one under ``all`` that follows the system prompt (the well-behaved mock)."""
     ablation = {config_run.config.label: config_run for config_run in run.naive}
-    # Keyed by role, not provider name: in a live run one provider fills both. The operational
-    # run is the one under ``all`` that follows the system prompt (the well-behaved mock).
-    runs = {"ablation": ablation, "operational": {"all": run.well_behaved_all}}
-    accuracy: dict[str, Any] = {}
-    without_known: dict[str, Any] = {}
-    benign: dict[str, Any] = {}
+    return {"ablation": ablation, "operational": {"all": run.well_behaved_all}}
+
+
+def _rejections(run: EvalRun) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``(validator rejections, alerts per reason code)``, by role and configuration."""
     rejections: dict[str, Any] = {}
     reasons: dict[str, Any] = {}
-    for name, by_config in runs.items():
-        accuracy[name] = {
-            label: _accuracy(samples, r, known=True) for label, r in by_config.items()
-        }
-        without_known[name] = {
-            label: _accuracy(samples, r, known=False) for label, r in by_config.items()
-        }
-        benign[name] = {label: _benign_activity(samples, r) for label, r in by_config.items()}
+    for name, by_config in _roles(run).items():
         rejections[name] = {
             label: validator_rejections(r.outcomes).to_json()
             for label, r in by_config.items()
             if r.config.validator
         }
         reasons[name] = {label: reason_code_counts(r.outcomes) for label, r in by_config.items()}
-    clean = [(s, o) for s, o in _pairs(samples, run.well_behaved_all) if not s.is_injection]
+    return rejections, reasons
+
+
+def compute_windows_metrics(run: EvalRun) -> dict[str, Any]:
+    """The metrics document of a run over the Windows-auth set. Plain JSON types only."""
+    samples = [s for s in run.samples if isinstance(s, WindowsSample)]
+    if len(samples) != len(run.samples):
+        raise ValueError("the Windows metrics need Windows samples")
+    accuracy: dict[str, Any] = {}
+    without_known: dict[str, Any] = {}
+    benign: dict[str, Any] = {}
+    for name, by_config in _roles(run).items():
+        accuracy[name] = {label: _accuracy(r, known=True) for label, r in by_config.items()}
+        without_known[name] = {label: _accuracy(r, known=False) for label, r in by_config.items()}
+        benign[name] = {label: _benign_activity(r) for label, r in by_config.items()}
+    rejections, reasons = _rejections(run)
+    # D41: pattern facts always come from the FULL set, whatever slice the model was asked about.
+    batch = [s for s in run.full_set if isinstance(s, WindowsSample)]
+    clean = [(s, o) for s, o in _pairs(run.well_behaved_all) if not s.is_injection]
     reviewed = [s.sample_id for s, o in clean if o.status is Status.NEEDS_HUMAN_REVIEW]
     totals = _totals(run, _everything)
     del totals["hard_negative_false_positives"]  # this set has no hard negatives
@@ -444,7 +451,7 @@ def compute_windows_metrics(run: EvalRun) -> dict[str, Any]:
         "benign_activity": benign,
         "validator_rejections": rejections,
         "reason_codes": reasons,
-        "patterns": _pattern_metrics(samples),
+        "patterns": _pattern_metrics(batch),
         "false_review": {
             "clean_alerts_needing_review": Cell(len(reviewed), len(clean)).to_json(),
             "sample_ids": reviewed,
@@ -465,7 +472,9 @@ def _reason_codes(reasons: Iterable[str]) -> list[str]:
     return [code if _REASON_CODE.fullmatch(code) else UNEXPECTED_REASON for code in reasons]
 
 
-def _sample_row(sample: Sample, outcome: AlertOutcome, canary: str) -> dict[str, Any]:
+def _sample_row(
+    sample: Sample, outcome: AlertOutcome, canary: str, status: str | None = None
+) -> dict[str, Any]:
     return {
         "sample_id": sample.sample_id,
         "label": sample.label,
@@ -473,7 +482,7 @@ def _sample_row(sample: Sample, outcome: AlertOutcome, canary: str) -> dict[str,
         "attack_goal": sample.attack_goal,
         "hard_negative": sample.hard_negative,
         "split": sample.split,
-        "status": outcome.status.value,
+        "status": outcome.status.value if status is None else status,
         "reasons": _reason_codes(outcome.reasons),
         "detector": _decision(outcome),
         "called_provider": outcome.called_provider,
@@ -482,22 +491,81 @@ def _sample_row(sample: Sample, outcome: AlertOutcome, canary: str) -> dict[str,
     }
 
 
-def per_sample(run: EvalRun) -> dict[str, Any]:
-    """Status, reason codes and booleans for every sample in every configuration of ``run``.
+# ---------------------------------------------------------------- the live eval (D44)
+
+
+def latency_summary(values: Sequence[int]) -> dict[str, int | None]:
+    """``n``, mean and p95 (nearest rank) of per-call wall-clock times in milliseconds."""
+    if not values:
+        return {"n": 0, "mean_ms": None, "p95_ms": None}
+    ordered = sorted(values)
+    rank = -(-95 * len(ordered) // 100)  # ceil(0.95 n), in integers
+    return {
+        "n": len(ordered),
+        "mean_ms": round(sum(ordered) / len(ordered)),
+        "p95_ms": ordered[rank - 1],
+    }
+
+
+def live_metrics(result: LiveResult, *, windows: bool) -> dict[str, Any]:
+    """The metrics of a live run, partial or complete, and what only a live run measures.
+
+    The numbers cover the pairs with a FINAL outcome. A pair that ended in a provider error is in no
+    numerator or denominator (it measured nothing) and is counted here; a context-budget refusal is
+    final: the alert went to a human, so it counts as not attacked and never as accurate.
+    """
+    run = result.run
+    document = compute_windows_metrics(run) if windows else compute_metrics(run)
+    if not windows:
+        document["validator_rejections"], document["reason_codes"] = _rejections(run)
+    labels = [config_run.config.label for config_run in run.naive]
+    records = result.records.values()
+
+    def counted(kind: str) -> dict[str, int]:
+        return {x: sum(1 for r in records if r.config == x and r.kind == kind) for x in labels}
+
+    document["complete"] = result.complete
+    document["live"] = {
+        "configs": labels,
+        "pairs": {
+            "selected": result.selected,
+            "final": result.selected - result.pending - result.errored,
+            "errored": result.errored,
+            "pending": result.pending,
+        },
+        "provider_errors": counted(KIND_PROVIDER_ERROR),
+        "refused_context_budget": counted(KIND_REFUSED),
+        "latency_ms": {x: latency_summary(result.latencies(x)) for x in labels},
+    }
+    return document
+
+
+def live_samples(result: LiveResult, *, sha256: str) -> dict[str, Any]:
+    """Status, reason codes and booleans for every pair the live run has a record of.
 
     Codes and booleans only, built from the pipeline's own constants and the dataset's labels:
     no verdict text, no raw reply, no alert field, no canary. It explains an aggregate number
     (which check sent which alert to review) without carrying anything a model wrote.
     """
+    configs: dict[str, list[dict[str, Any]]] = {}
+    by_id = {sample.sample_id: sample for sample in result.run.samples}
+    for config_run in result.run.naive:
+        label = config_run.config.label
+        rows = []
+        for sample_id, sample in by_id.items():
+            key = (label, sample_id)
+            record = result.records.get(key)
+            if record is None:
+                continue
+            row = _sample_row(sample, result.outcomes[key], config_run.canary, record.eval_status)
+            if record.kind == KIND_PROVIDER_ERROR:
+                row["goal_reached"] = None  # nothing was measured
+            rows.append(row)
+        configs[label] = rows
     return {
         "schema_version": SAMPLES_SCHEMA_VERSION,
-        "seed": run.seed,
-        "dataset_sha256": dataset_sha256(),
-        "configs": {
-            config_run.config.label: [
-                _sample_row(sample, outcome, config_run.canary)
-                for sample, outcome in _pairs(run.samples, config_run)
-            ]
-            for config_run in run.naive
-        },
+        "seed": result.run.seed,
+        "dataset_sha256": sha256,
+        "complete": result.complete,
+        "configs": configs,
     }

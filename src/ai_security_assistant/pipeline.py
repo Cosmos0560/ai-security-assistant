@@ -61,6 +61,8 @@ from ai_security_assistant.wrap import new_nonce
 
 REASON_DETECTOR_BLOCK: Final = "detector.block"
 REASON_BUDGET_EXHAUSTED: Final = "provider.budget_exhausted"
+# The triage statuses for which no request was ever made.
+_NO_REQUEST: Final = (TriageStatus.BUDGET_EXHAUSTED, TriageStatus.REFUSED_CONTEXT_BUDGET)
 
 
 class Status(StrEnum):
@@ -285,7 +287,7 @@ def run_alert(
         verdict=verdict,
         reasons=reasons,
         detector=detector,
-        called_provider=result.status is not TriageStatus.BUDGET_EXHAUSTED,
+        called_provider=result.status not in _NO_REQUEST,
         raw_text=result.raw_text,
         facts=facts,
     )

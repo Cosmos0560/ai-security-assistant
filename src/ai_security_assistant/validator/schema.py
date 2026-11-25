@@ -47,6 +47,7 @@ RULE_NO_REPLY: Final = "no_reply"
 RULE_MALFORMED_REPLY: Final = "malformed_reply"
 RULE_BUDGET_EXHAUSTED: Final = "budget_exhausted"
 RULE_PROVIDER_ERROR: Final = "provider_error"
+RULE_REFUSED_CONTEXT_BUDGET: Final = "refused_context_budget"
 RULE_STATUS_MISMATCH: Final = "status_mismatch"
 # The strict parse's own reason codes pass through unchanged.
 PARSE_RULES: Final = frozenset(
@@ -207,6 +208,8 @@ def check(ctx: Context) -> list[str]:
         return [RULE_BUDGET_EXHAUSTED]
     if result.status is TriageStatus.PROVIDER_ERROR:
         return [RULE_PROVIDER_ERROR]
+    if result.status is TriageStatus.REFUSED_CONTEXT_BUDGET:
+        return [RULE_REFUSED_CONTEXT_BUDGET]
     if result.raw_text is None:
         malformed = result.status is TriageStatus.PARSE_FAILURE
         return [RULE_MALFORMED_REPLY if malformed else RULE_NO_REPLY]

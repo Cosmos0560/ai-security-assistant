@@ -6,6 +6,7 @@ The model name is never written here: tests read it from ``DEFAULT_MODEL``.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -175,3 +176,16 @@ def test_the_text_walk_skips_caches_and_binary_files(
     (root / "src" / "a.py").write_bytes(b"a = 1\r\nb = 2\r\n")  # type: ignore[operator]
     monkeypatch.setattr(gate, "ROOT", root)
     assert list(gate._text_files(["src"])) == [("src/a.py", "a = 1\nb = 2\n")]
+
+
+@pytest.mark.parametrize(
+    "path", ["reports/qwen.checkpoint.jsonl", "a.CHECKPOINT.JSONL", "x/y.checkpoint.jsonl"]
+)
+def test_an_eval_checkpoint_must_never_be_staged(gate: ModuleType, path: str) -> None:
+    (problem,) = gate.hygiene_problems(["README.md", path])
+    assert "checkpoint" in problem
+
+
+def test_checkpoints_are_git_ignored() -> None:
+    ignored = (Path(__file__).resolve().parent.parent / ".gitignore").read_text(encoding="utf-8")
+    assert "*.checkpoint.jsonl" in ignored.splitlines()

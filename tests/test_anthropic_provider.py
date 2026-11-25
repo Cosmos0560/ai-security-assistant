@@ -109,6 +109,10 @@ def test_the_request_is_a_forced_tool_call_with_every_cost_guard() -> None:
     assert budget.used == 1
 
 
+def test_the_model_name_is_readable_for_the_eval_checkpoint() -> None:
+    assert AnthropicProvider(CallBudget(1), environ={}, client=object()).model == DEFAULT_MODEL
+
+
 def test_the_tool_input_comes_back_as_raw_json_for_the_strict_parse() -> None:
     p, _client, _budget = provider(tool_reply())
     result = triage_alert(p, "s", "u")

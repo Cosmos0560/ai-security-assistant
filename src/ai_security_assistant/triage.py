@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 from ai_security_assistant.providers.base import (
     BudgetExhausted,
+    ContextBudgetExceeded,
     MalformedReply,
     Provider,
     ProviderError,
@@ -46,6 +47,7 @@ class TriageStatus(StrEnum):
     PARSE_FAILURE = "parse_failure"
     BUDGET_EXHAUSTED = "budget_exhausted"
     PROVIDER_ERROR = "provider_error"
+    REFUSED_CONTEXT_BUDGET = "refused_context_budget"  # no request was made
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,8 @@ def triage_alert(provider: Provider, system: str, user: str) -> TriageResult:
         return TriageResult(TriageStatus.BUDGET_EXHAUSTED)
     except MalformedReply as exc:
         return TriageResult(TriageStatus.PARSE_FAILURE, reason=exc.reason)
+    except ContextBudgetExceeded:
+        return TriageResult(TriageStatus.REFUSED_CONTEXT_BUDGET)
     except ProviderError:
         return TriageResult(TriageStatus.PROVIDER_ERROR)
     output, reason = parse_triage(text)
