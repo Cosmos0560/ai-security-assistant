@@ -952,6 +952,17 @@ def check_readme_metrics() -> list[str]:
     return run_tool([sys.executable, "-m", README_TABLE_MODULE, "--check", str(README)])
 
 
+COMPARE_TABLE_MODULE = "ai_security_assistant.eval.compare_table"
+LIVE_RESULTS = ROOT / "docs" / "live-eval"
+
+
+def check_comparison() -> list[str]:
+    """Regenerate the model comparison block from the committed results files and the mock eval,
+    and compare it with the README (D45), the same way as the metrics block."""
+    args = [sys.executable, "-m", COMPARE_TABLE_MODULE, "--check", str(README), str(LIVE_RESULTS)]
+    return run_tool(args)
+
+
 # --------------------------------------------------------------------------- graph and hygiene
 
 GRAPH_DIR = "graphify-out"
@@ -1146,7 +1157,9 @@ INIT_FILE = SRC / PACKAGE / "__init__.py"
 MIN_PYTHON = (3, 11)
 WHEEL_MUST_CONTAIN = (
     f"{PACKAGE}/data/eval/alerts.jsonl",
+    f"{PACKAGE}/data/eval/windows_auth.jsonl",
     f"{PACKAGE}/data/mitre_allowlist.json",
+    f"{PACKAGE}/data/windows_kb.json",
     f"{PACKAGE}/third_party/secret_scanner/VERSION",
     f"{PACKAGE}/third_party/secret_scanner/MANIFEST.sha256",
 )
@@ -1271,9 +1284,22 @@ class Release:
             problems.append("aisa eval wrote no metrics file")
         if problems:
             return problems
-        # The installed package must reproduce the committed README numbers byte for byte.
+        windows = self.scratch / "windows.json"
+        args = [self.aisa, "eval", "--dataset", "windows", "--out", windows]
+        problems = expect_exit(_run(args, self.scratch), 0, "Windows eval")
+        if not problems and not windows.is_file():
+            problems.append("aisa eval --dataset windows wrote no metrics file")
+        if problems:
+            return problems
+        # The installed package must reproduce both committed README blocks byte for byte.
         check = [self.venv_python, "-m", README_TABLE_MODULE, "--check", README]
-        return expect_exit(_run(check, self.scratch), 0, "README metrics from the installed wheel")
+        problems = expect_exit(
+            _run(check, self.scratch), 0, "README metrics from the installed wheel"
+        )
+        compare = [self.venv_python, "-m", COMPARE_TABLE_MODULE, "--check", README, LIVE_RESULTS]
+        return problems + expect_exit(
+            _run(compare, self.scratch), 0, "README comparison from the installed wheel"
+        )
 
     def cli_smoke(self) -> list[str]:
         version = _run([self.aisa, "--version"], self.scratch)
@@ -1342,6 +1368,7 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
     ("Windows KB reference text passes validator check 9", check_kb_selfcheck),
     ("Windows eval set invariants", check_windows_dataset),
     ("README metrics block matches the eval", check_readme_metrics),
+    ("README comparison block matches the results files", check_comparison),
     ("graph output not staged, ignored", check_graph),
     ("commit hygiene (no AGENTS.md, .codex, .env, checkpoints)", check_hygiene),
     ("ollama provider imports only stdlib and project modules", check_ollama_imports),

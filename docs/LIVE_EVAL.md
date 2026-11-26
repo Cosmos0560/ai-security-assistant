@@ -41,20 +41,14 @@ The two full runs, the shorter one first:
 
 | Run | Pairs (alerts x 4 configs) | Calls with reuse (default) | Calls with `--no-reuse` |
 | --- | --- | --- | --- |
-| Windows | 196 | about 97 | about 193 |
-| Main | 480 | about 240 | about 464 |
+| Windows | 196 | 97 | about 193 |
+| Main | 480 | 240 | about 464 |
 
-| Estimated time | With reuse | With `--no-reuse` |
-| --- | --- | --- |
-| Windows | about 2 hours | about 2.7 hours |
-| Main | about 4.5 hours | about 6.5 hours |
-
-**These estimates predate the technique list**, which makes every prompt about 1,600 characters
-longer; expect more, and trust the eval's own ETA. They come from one trial on the owner's CPU laptop (2026-11-25, two Windows-set alerts, 8 calls):
-46 to 90 seconds for a prompt Ollama had not just seen, about 30 seconds for an immediate repeat,
-which Ollama's own prompt cache makes cheaper. So reuse saves about 30%, not half. No main-set
-alert was measured. After the first calls the eval prints an estimate from your own machine, for
-example `[38/196] detector-only w010: triaged in 1m15s; 77 model calls left, ETA about 1h31m`.
+Measured on the owner's CPU-only laptop (2026-11-26, with reuse): the Windows set took 97 calls of
+49.6 s on average (p95 78.7 s), about 1.3 hours of model time; the main set 240 calls of 41.8 s
+(p95 57.1 s), about 2.8 hours. `--no-reuse` roughly doubles the calls; its time was not measured.
+Trust the eval's own ETA, for example
+`[38/196] detector-only w010: triaged in 1m15s; 77 model calls left, ETA about 1h31m`.
 
 **Reply reuse.** For `ollama`, each distinct prompt (system and user together) is sent once. The
 three sanitized configurations build the same prompt, so they judge the same reply, each with its
@@ -140,6 +134,56 @@ accuracy (`n` of the 9 scored alerts of the 10; the second figure leaves out kno
 this slice has none). `none` is the undefended baseline: it has no validator and no trusted
 reference facts, so its accuracy is not the accuracy of the defended configurations.
 
+## Committed results
+
+| Files in [live-eval/](live-eval/) | What they are |
+| --- | --- |
+| `2026-11-26-qwen3-8b-main.json`, `...samples.json` | `qwen3:8b`, main set, 4 configurations, prompt version 3, 240 calls |
+| `2026-11-26-qwen3-8b-windows.json`, `...samples.json` | `qwen3:8b`, Windows-auth set, prompt version 3, 97 calls |
+| `2026-11-19-claude-haiku-5-5.json` | Claude Haiku 5.5, main set, prompt version 1 (v1.0.0). Kept as history; not comparable and not in the table |
+
+They hold counts, codes and booleans only: no model text, alert field or canary. The checkpoints,
+which do hold model text, are not committed.
+
+The two `qwen3:8b` metrics files were rebuilt after the run from its checkpoints, with no model
+call, because the scoring was corrected:
+
+```bash
+.venv/Scripts/python scripts/recompute_live.py reports/live-windows.json reports/live-windows.checkpoint.jsonl docs/live-eval/2026-11-26-qwen3-8b-windows.json
+```
+
+Every saved reply goes through the pipeline again, which refuses if a prompt or a decision differs.
+The correction: where the batch counts show no pattern, a spraying or brute-force sub-technique no
+longer counts as correct for an expected `T1110`, because check 9 rejects exactly those claims.
+Under `none` accuracy went from 38/44 to 19/44 and under `detector-only` from 35/44 to 13/44;
+`validator-only` and `all` stayed at 13/44. Attack success did not change.
+
+**The comparison table** in the README is generated from the mock eval and these files; the gate
+fails if it differs. To add a run, copy its `.json` and `.samples.json` here as
+`<date>-<model>-<set>.json` and rewrite the block:
+
+```bash
+.venv/Scripts/python -m ai_security_assistant.eval.compare_table --write README.md docs/live-eval
+```
+
+Only a run marked `"complete": true`, on the packaged dataset, fills a column; of several for one
+model and set, the latest. The table names every file it does not use, and why.
+
+## What the metrics mean
+
+Besides the mock eval's figures (attack success, detection, schema-valid):
+
+| Field | Meaning |
+| --- | --- |
+| `triage_accuracy` | Windows set: accepted, the expected technique, severity at least the expected one, of the 44 scored alerts. A parent technique accepts its sub-techniques, except where the batch fact is `undetermined`. |
+| `triage_accuracy_non_injection` | The same over the 36 scored alerts without an injection. |
+| `accepted_precision` | The same over the scored alerts that were accepted. |
+| `..._excluding_known_misses` | Each of the three without the labelled blind-spot alerts. |
+| `review_rate` | Alerts not accepted, of all and of those without an injection, per configuration. |
+| `severity_over_escalation` | Accepted answers above the expected severity, of the accepted ones. |
+| `validator_rejections`, `reason_codes` | Rejected replies of the replies, and alerts per reason code. |
+| `live` | Provider, model, date, latency, calls, reuse, errors and refusals. |
+
 ## What a live eval does
 
 One provider answers in every selected configuration (`none`, `detector-only`, `validator-only`,
@@ -181,43 +225,49 @@ The 2026-11-19 run predates this file, so its 33/60 cannot be broken down; the n
 
 ## The Anthropic command
 
-Git Bash on Windows (use `.venv/bin/` on Linux):
+Git Bash on Windows (use `.venv/bin/` on Linux), both sets:
 
 ```bash
-.venv/Scripts/python -m pip install ".[anthropic]"
+.venv/Scripts/python -m pip install -e ".[anthropic]"
 export ANTHROPIC_API_KEY=...        # your key; never commit it or write it to a file
-AISA_LIVE=1 .venv/Scripts/aisa eval --provider anthropic --max-calls 480 --out live-metrics.json
 ```
 
-`480` covers 120 alerts x 4 configurations. The detector blocks some alerts before any call under
-`detector-only` and `all`, so a clean run needs about 464 calls, which leaves a little room for
-retries. `--max-calls` is per invocation. When it runs out, the remaining pairs are simply not run,
-the results are written with `"complete": false` and the command exits with 3; run the same command
-again to continue. Exit codes: `0` complete, `3` incomplete, `2` a guard, setup or checkpoint
-error (nothing was called), `1` internal error (the checkpoint keeps what was finished).
+```bash
+AISA_LIVE=1 .venv/Scripts/aisa eval --provider anthropic --dataset windows --max-calls 220 --out reports/haiku-windows.json
+```
 
-The model is `AISA_ANTHROPIC_MODEL` (default `claude-haiku-5-5`). Do not commit
-`live-metrics.json` into the README; quote it, with its model and date, if you publish it.
+```bash
+AISA_LIVE=1 .venv/Scripts/aisa eval --provider anthropic --dataset main --max-calls 480 --out reports/haiku-main.json
+```
+
+A clean run needs 196 calls (Windows) and about 464 (main: 480 pairs, less the alerts the detector
+blocks before any call). `--max-calls` is per invocation. When it runs out, the remaining pairs are
+simply not run, the results are written with `"complete": false` and the command exits with 3; run
+the same command again to continue. Exit codes: `0` complete, `3` incomplete, `2` a guard, setup
+or checkpoint error (nothing was called), `1` internal error (the checkpoint keeps what was
+finished).
+
+The model is `AISA_ANTHROPIC_MODEL` (default `claude-haiku-5-5`). Replies are never reused for this
+provider: every configuration gets its own call, so unlike the local run, its configurations differ
+by the model's variation too. Its tool schema does not limit `mitre_technique` to the allowlist.
 
 ## Expected cost
 
-Measured on the dataset: 464 calls with about 1.23 million characters of prompt in total (the
-`none` prompts are about 1,000 characters, the fenced prompts about 2,070), plus the tool
-schema on every call. That is roughly 0.3 to 0.5 million input tokens. Output is one forced tool
-call per reply, capped at `max_tokens` 600.
+Measured on the datasets with prompt version 3: 660 calls with about 3.2 million characters of
+prompt and tool schema (main 2.1 million, Windows 1.1 million). Output is one forced tool call per
+reply, capped at `max_tokens` 600.
 
 At the Claude Haiku 5.5 list price of $0.10 per million input tokens and $0.50 per million output
-tokens (Anthropic's price table as cached on 2026-11-03; check the current price list before
-running):
+tokens for prompts up to 100K tokens (Anthropic's price table as cached on 2026-11-03; check the
+current price list before running):
 
-| | Tokens | Cost |
-| --- | --- | --- |
-| Expected | 0.3-0.5M in, 0.07-0.28M out | about $0.07 to $0.19 |
-| Hard ceiling with `--max-calls 480` | at most about 0.75M in, 0.29M out | about $0.22 |
+| | Cost |
+| --- | --- |
+| Expected, both sets (estimated from characters, not measured in tokens) | about $0.15 to $0.30 |
+| Ceiling with `--max-calls` 220 and 480 | about $0.40 |
 
-The ceiling comes from the budget: 480 attempts at most, each at most about 1,500 input tokens
-and 600 output tokens. The output stays small because a forced tool call on Claude Haiku 5.5
-skips thinking, so the reply is the tool call alone.
+The output stays small because a forced tool call on Claude Haiku 5.5 skips thinking, so the reply
+is the tool call alone.
 
 ## Which models work
 

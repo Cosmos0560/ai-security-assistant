@@ -9,6 +9,7 @@ content get past the defense layer in a way the documentation does not already l
   non-JSON output that reaches a `triaged` verdict with every defense on;
 - text in an alert or a model reply that is rendered live in `report.md` or the terminal (a
   link, image, HTML, escape sequence or bidi control);
+- alert data sent anywhere but a loopback address by the local provider;
 - any path by which the tool executes something, writes outside its output folder, or exposes the
   API key;
 - a way to make the gate pass on code that breaks its rules.
@@ -16,12 +17,13 @@ content get past the defense layer in a way the documentation does not already l
 Out of scope, because they are documented limits (README "What it can't do",
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)): attacker-chosen text inside a valid summary
 (`summary_manipulation`), forced severity upgrades, paraphrased or non-English injections that
-get past the pattern detector but are still stopped by the validator, entropy-only secrets, and
-the behaviour of a third-party model. Vulnerabilities in the vendored secret-scanner belong to
+get past the pattern detector but are still stopped by the validator, entropy-only secrets,
+Windows misstatements with no code near them, spraying the batch counts cannot see, and the
+behaviour of a third-party model. Vulnerabilities in the vendored secret-scanner belong to
 [secret-scanner](https://github.com/Cosmos0560/secret-scanner) as well; report them here if they
 affect this tool.
 
-Supported version: the latest release (1.0.x).
+Supported version: the latest release (1.1.x).
 
 ## Reporting privately
 

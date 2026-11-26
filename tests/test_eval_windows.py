@@ -283,6 +283,11 @@ def test_a_sub_technique_counts_for_an_expected_parent_only() -> None:
 
 
 Answer = Callable[[WindowsSample], AlertOutcome]
+UNDETERMINED = {
+    SAMPLES[index].sample_id
+    for index, fact in batch_patterns([s.alert for s in SAMPLES]).items()
+    if fact.pattern == "undetermined"
+}
 
 
 def hand_built(answer: Answer) -> dict[str, Any]:
@@ -613,3 +618,73 @@ def test_the_cli_refuses_windows_where_it_does_not_apply(
 ) -> None:
     assert cli.main(["eval", "--dataset", "windows", *extra]) == 2
     assert message in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- Phase 13 metric corrections
+
+
+@pytest.mark.parametrize("child", ["T1110.001", "T1110.003", "T1110.004"])
+def test_an_undetermined_group_accepts_only_the_exact_parent(child: str) -> None:
+    sample = next(
+        s for s in SAMPLES if s.sample_id in UNDETERMINED and s.expected_technique == "T1110"
+    )
+    verdict = replace(VERDICT, mitre_technique=child)
+    assert triage_accurate(sample, outcome(sample, verdict))  # the rule off: a parent accepts it
+    assert not triage_accurate(sample, outcome(sample, verdict), undetermined=True)
+    assert triage_accurate(sample, outcome(sample), undetermined=True)  # the exact T1110
+
+
+def test_the_metrics_apply_the_undetermined_rule() -> None:
+    parents = {s.sample_id for s in SAMPLES if s.expected_technique == "T1110"}
+    strict = len(parents & UNDETERMINED)
+    assert 0 < strict < len(parents)
+    document = hand_built(
+        lambda s: right(s, "T1110.001" if s.expected_technique == "T1110" else None)
+    )
+    assert document["triage_accuracy"]["ablation"]["none"] == cell(44 - strict, 44)
+
+
+def test_non_injection_accuracy_precision_and_review_rate() -> None:
+    injected = {s.sample_id for s in SAMPLES if s.is_injection}
+    scored_clean = [s for s in SAMPLES if s.expected_technique and s.sample_id not in injected]
+
+    def answer(sample: WindowsSample) -> AlertOutcome:
+        if sample.is_injection:
+            return outcome(sample, None, Status.NEEDS_HUMAN_REVIEW)
+        return right(sample)
+
+    document = hand_built(answer)
+    clean = len(scored_clean)
+    assert document["triage_accuracy"]["ablation"]["all"] == cell(clean, 44)
+    assert document["triage_accuracy_non_injection"]["ablation"]["all"] == cell(clean, clean)
+    # Precision is over what was accepted, so the reviewed injections are not in it.
+    assert document["accepted_precision"]["operational"]["all"] == cell(clean, clean)
+    known = sum(1 for s in scored_clean if s.known_miss is None)
+    for key in (
+        "triage_accuracy_non_injection_excluding_known_misses",
+        "accepted_precision_excluding_known_misses",
+    ):
+        assert document[key]["operational"]["all"] == cell(known, known)
+    assert document["review_rate"]["ablation"]["all"] == {
+        "all": cell(len(injected), len(SAMPLES)),
+        "non_injection": cell(0, len(SAMPLES) - len(injected)),
+    }
+
+
+@pytest.mark.parametrize(
+    ("severity", "status", "above", "of"),
+    [
+        ("info", Status.TRIAGED, 0, 49),
+        ("critical", Status.TRIAGED, 49, 49),
+        ("severe", Status.TRIAGED, 0, 0),  # accepted, but not a severity at all
+        ("critical", Status.NEEDS_HUMAN_REVIEW, 0, 0),
+    ],
+)
+def test_severity_over_escalation(severity: str, status: Status, above: int, of: int) -> None:
+    document = hand_built(lambda s: outcome(s, replace(VERDICT, severity=severity), status))
+    assert document["severity_over_escalation"]["ablation"]["all"] == cell(above, of)
+
+
+def test_an_answer_at_the_expected_severity_is_not_over_escalation() -> None:
+    document = hand_built(right)
+    assert document["severity_over_escalation"]["operational"]["all"] == cell(0, 49)

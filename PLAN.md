@@ -935,6 +935,14 @@ exact match. Validator check 3 still accepts only allowlisted IDs. Kept limits: 
 Russian-locale 4625 in the three configurations whose prompt escapes Cyrillic, so the local model
 is asked about it only under `none`.
 
+Phase 13 correction (owner), before the numbers were published: where the D41 batch fact, computed
+from the full set, is `undetermined`, an expected parent does NOT accept its sub-techniques, because
+check 9 rejects those claims; the rule applies in every configuration, `none` included. The
+blind-spot alerts keep their exact T1110.003 label. Added measures: accuracy on alerts without an
+injection, precision of accepted triages, review rate per configuration (both sets), and severity
+over-escalation (accepted answers above `expected_min_severity`). The live numbers were rebuilt from
+the checkpoints with `scripts/recompute_live.py`, with no model call.
+
 **D44. The live eval is resumable, sliceable and timed.**
 `aisa eval --provider {anthropic,ollama} --out FILE` gains:
 - `--dataset {main,windows}`;
@@ -1015,6 +1023,10 @@ The columns are mock, Claude Haiku 5.5 and qwen3:8b, with prompt version and dat
 missing measurement is `n/a`, never blank. For example, the 2026-11-19 Haiku run has no latency
 and no Windows set, and its prompt version is 1. The gate regenerates the block and compares it
 byte-exact after LF normalization (as D25). Rejected: hand-edited comparison numbers.
+Phase 13 details: the columns are headed by each provider's default model; a file fills a column if
+it is complete and its dataset hash is the packaged one (latest date wins), and every other file is
+named in the block with the reason; per-configuration tables for each column follow the summary; a
+count with a zero denominator is `n/a`.
 
 ### 11.2 Architecture delta
 
