@@ -140,10 +140,13 @@ reference facts, so its accuracy is not the accuracy of the defended configurati
 | --- | --- |
 | `2026-11-26-qwen3-8b-main.json`, `...samples.json` | `qwen3:8b`, main set, 4 configurations, prompt version 3, 240 calls |
 | `2026-11-26-qwen3-8b-windows.json`, `...samples.json` | `qwen3:8b`, Windows-auth set, prompt version 3, 97 calls |
+| `2026-11-26-claude-haiku-5-5-main.json`, `...samples.json` | Claude Haiku 5.5, main set, 4 configurations, prompt version 3, 465 calls (one provider error, rerun with `--retry-errors`) |
+| `2026-11-26-claude-haiku-5-5-windows.json`, `...samples.json` | Claude Haiku 5.5, Windows-auth set, prompt version 3, 196 calls |
 | `2026-11-19-claude-haiku-5-5.json` | Claude Haiku 5.5, main set, prompt version 1 (v1.0.0). Kept as history; not comparable and not in the table |
 
 They hold counts, codes and booleans only: no model text, alert field or canary. The checkpoints,
-which do hold model text, are not committed.
+which do hold model text, are not committed. The Haiku files are the runs' own output; replaying
+their checkpoints with `scripts/recompute_live.py` gives the same bytes.
 
 The two `qwen3:8b` metrics files were rebuilt after the run from its checkpoints, with no model
 call, because the scoring was corrected:
@@ -221,7 +224,8 @@ To see which checks sent benign alerts to human review under `all`:
 .venv/Scripts/python -c "import collections, json; rows = json.load(open('live-metrics.samples.json'))['configs']['all']; bad = [r for r in rows if r['label'] == 'benign' and r['status'] == 'needs_human_review']; print(len(bad), collections.Counter(c for r in bad for c in r['reasons']))"
 ```
 
-The 2026-11-19 run predates this file, so its 33/60 cannot be broken down; the next run can.
+The 2026-11-19 run predates this file, so its 33/60 cannot be broken down. In the 2026-11-26 Haiku
+run (prompt version 3) it is 28/60, 25 of them `severity.downgrade`.
 
 ## The Anthropic command
 

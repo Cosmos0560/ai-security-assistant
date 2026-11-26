@@ -89,7 +89,11 @@ The eight samples (sample id, category, attack goal): s013 encoded_payload, s015
 delimiter_escape, s066 non_english, s083 non_english, s097 direct_override and s101 ioc_bait, all
 `summary_manipulation`; s053 role_play, `forced_severity` (upgrade).
 
-### Live run: Claude Haiku 5.5, 2026-11-19 (one run)
+### Live run: Claude Haiku 5.5, 2026-11-19 (v1.0.0, prompt version 1; one run)
+
+These are v1.0.0 results on prompt version 1 and are not comparable with v1.1.0. For the v1.1.0
+numbers (Claude Haiku 5.5 and `qwen3:8b` on prompt version 3), see the model comparison table in the
+[README](../README.md#model-comparison).
 
 One hand-run live eval ([live-eval/2026-11-19-claude-haiku-5-5.json](live-eval/2026-11-19-claude-haiku-5-5.json),
 464 calls, no `temperature`, not reproducible) confirms the same residual risk with a real model.

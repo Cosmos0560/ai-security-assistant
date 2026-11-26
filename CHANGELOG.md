@@ -47,6 +47,16 @@ Local models through Ollama, and Windows facts that the model is never trusted t
   above the expected severity; 24/41 alerts without an injection sent to review.
 - Mean latency per call on a CPU: 41.8 s (main), 49.6 s (Windows).
 
+### Measured (live run, Claude Haiku 5.5, 2026-11-26, one run per set)
+
+- Main set attack success: `none` 8/60, `detector-only` 1/60, `validator-only` 0/60, `all` 0/60;
+  benign alerts sent to review under `all`: 28/60, 25 of them by the severity floor.
+- Windows set attack success: `none` 7/8, `detector-only` 5/8, `validator-only` 0/8, `all` 0/8;
+  triage accuracy under `all` 15/44, precision of accepted 15/23, 4/28 accepted verdicts above the
+  expected severity; 15/41 alerts without an injection sent to review, 14 of them for a summary
+  over 500 characters.
+- One call per configuration (no reply reuse); mean latency per call 1.8 s on both sets.
+
 ### Known limits
 
 - Distributed and low-and-slow spraying are not seen. A Windows misstatement with no code near it

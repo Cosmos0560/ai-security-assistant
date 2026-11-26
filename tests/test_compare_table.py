@@ -21,14 +21,15 @@ from ai_security_assistant.providers import anthropic, ollama
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "docs" / "live-eval"
 README = ROOT / "README.md"
-OLD_HAIKU = "2026-11-19-claude-haiku-5-5.json"
+HAIKU, QWEN = anthropic.DEFAULT_MODEL, ollama.DEFAULT_MODEL
+OLD_HAIKU = f"2026-11-19-{HAIKU}.json"
 # The files this module reads by name. Later runs may be added to the folder beside them.
 LOCAL_RUNS = {name: f"2026-11-26-qwen3-8b-{name}.json" for name in ("main", "windows")}
-HAIKU, QWEN = anthropic.DEFAULT_MODEL, ollama.DEFAULT_MODEL
+HAIKU_RUNS = {name: f"2026-11-26-{HAIKU}-{name}.json" for name in ("main", "windows")}
 
 
-def committed(dataset: str) -> dict[str, Any]:
-    document: dict[str, Any] = json.loads((RESULTS / LOCAL_RUNS[dataset]).read_bytes())
+def committed(dataset: str, runs: dict[str, str] = LOCAL_RUNS) -> dict[str, Any]:
+    document: dict[str, Any] = json.loads((RESULTS / runs[dataset]).read_bytes())
     return document
 
 
@@ -48,11 +49,11 @@ def mock() -> Column:
 
 
 @pytest.fixture
-def first_release(tmp_path: Path) -> Path:
-    """The folder as first published: the two local runs and the old Haiku run."""
+def release(tmp_path: Path) -> Path:
+    """The folder as released in 1.1.0: both models on both sets, and the old Haiku run."""
     folder = tmp_path / "results"
     folder.mkdir()
-    for name in (*LOCAL_RUNS.values(), OLD_HAIKU):
+    for name in (*LOCAL_RUNS.values(), *HAIKU_RUNS.values(), OLD_HAIKU):
         (folder / name).write_bytes((RESULTS / name).read_bytes())
     return folder
 
@@ -69,27 +70,32 @@ def rows(block: str) -> dict[str, list[str]]:
 # ---------------------------------------------------------------- the committed files
 
 
-def test_the_committed_results_fill_the_local_model_column(first_release: Path) -> None:
-    used, unused = load_results(first_release)
-    assert set(used) == {(QWEN, "main"), (QWEN, "windows")}
+def test_the_committed_results_fill_both_model_columns(release: Path) -> None:
+    used, unused = load_results(release)
+    assert set(used) == {(model, name) for model in (HAIKU, QWEN) for name in ("main", "windows")}
     assert unused == [(OLD_HAIKU, "prompt version 1; not marked complete")]
 
 
-def test_the_block_shows_the_committed_numbers_and_names_what_is_missing(
-    first_release: Path,
-) -> None:
-    block = compare_table.build_block(first_release)
+def test_the_block_shows_the_committed_numbers_and_names_the_unused_file(release: Path) -> None:
+    block = compare_table.build_block(release)
     table = rows(block)
-    main = committed("main")["totals"]["full"]["attack_success"]
     mock_cell, haiku_cell, qwen_cell = table["Attack success, `all`"]
-    assert qwen_cell == f"{main['all']['n']}/{main['all']['of']}"
-    assert mock_cell == "8/60" and haiku_cell == "n/a"
-    assert all(cells[1] in ("n/a", "") for cells in table.values())  # the whole column
-    assert all(
-        cell for label, cells in table.items() if not label.startswith("**") for cell in cells
-    )
-    assert f"`{HAIKU}` is `n/a`: no complete results file for it is committed." in block
+    for cell, runs in ((haiku_cell, HAIKU_RUNS), (qwen_cell, LOCAL_RUNS)):
+        main = committed("main", runs)["totals"]["full"]["attack_success"]["all"]
+        assert cell == f"{main['n']}/{main['of']}"
+    assert mock_cell == "8/60"
+    for label, cells in table.items():
+        if not label.startswith("**"):
+            assert all(cells) and "n/a" not in cells[1:], label  # both model columns are full
+    assert f"**`{HAIKU}` by configuration.**" in block and "no complete results file" not in block
     assert f"`{OLD_HAIKU}` (prompt version 1; not marked complete)" in block
+
+
+def test_a_model_with_no_results_file_is_named(mock: Column) -> None:
+    block = compare_table.render_block([mock, Column(HAIKU, None, None)], [])
+    assert rows(block)["Attack success, `all`"] == ["8/60", "n/a"]
+    assert f"`{HAIKU}` is `n/a`: no complete results file for it is committed." in block
+    assert f"**`{HAIKU}` by configuration.**" not in block
 
 
 def test_no_cell_is_blank_in_the_per_configuration_tables() -> None:

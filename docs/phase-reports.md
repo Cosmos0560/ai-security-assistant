@@ -144,3 +144,13 @@ Phase 12c (owner): the MITRE finding, fixed before any long run. Finding: in the
 
 Graphify: used for `graphify update .` at start (graph older than HEAD; AST only, no LLM, no network, 3195 nodes) and after the new modules, and one `graphify query` to locate the eval modules; files opened in this repo: about 25, versus about the same without the graph (no saving this phase).
 
+## Phase 13 addendum (v1.1.0): Haiku column
+
+1. Phase 13 addendum, fill the Haiku column of the model comparison with the owner's Claude Haiku 5.5 runs on prompt version 3.
+2. Checked both owner results files say `"complete": true` (main finished after one provider error and `--retry-errors`); a replay of each checkpoint with `scripts/recompute_live.py` gave the same bytes; copied results and samples (codes, counts, booleans only) to `docs/live-eval/2026-11-26-claude-haiku-5-5-{main,windows}`; regenerated the comparison block; README notes on comparing the two models (`none` direction and the format constraint, no reply reuse, latency, Haiku's review causes); LIVE_EVAL committed-results table, CHANGELOG measured section; the two pinned comparison tests now pin the 1.1.0 folder with both models, and a new test keeps the missing-column note covered.
+3. Gate `--full` green on Windows (Python 3.13.14) and in WSL (`.venv-wsl`, release venv Python 3.14.4): 2759 tests (3 live deselected), 100% line and branch coverage overall and on `validator/`; the installed wheel's `compare_table --check` passes on the new block. No model call was made.
+4. Deviations: the README note on Haiku's review causes (severity floor on main, summary length on Windows) was added beyond the three notes asked for (kept at the owner's request); THREAT_MODEL's 2026-11-19 Haiku section is labelled v1.0.0 / prompt version 1 and points to the README comparison table for the v1.1.0 numbers.
+5. Next: none in PLAN; the owner reviews, pushes, checks the CI matrix, tags v1.1.0 and releases.
+
+Graphify: not used; the files were known from this session's Phase 13 work (6 opened), no query needed.
+
